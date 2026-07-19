@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Whisper CPU Live Transcribe</title>
+  <link rel="stylesheet" href="./index.css">
+</head>
+<body>
+  <div class="app-container">
+    <div class="header">
+      <div class="header-title">
+        <h1>DTT</h1>
+        <p>Discord to text</p>
+      </div>
+      <div class="status-badge">
+        <div id="statusDot" class="status-dot"></div>
+        <span id="statusText">Disconnected</span>
+      </div>
+    </div>
+
+    <!-- Audio Visualizer -->
+    <div class="visualizer-container">
+      <canvas id="visualizer" class="visualizer-canvas"></canvas>
+    </div>
+
+    <!-- Controls -->
+    <div class="controls">
+      <button id="toggleBtn" class="btn btn-primary">
+        <svg id="toggleIcon" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
+          <path d="M11.596 8.697l-6.363 3.692c-.54.313-1.233-.066-1.233-.697V4.308c0-.63.692-1.01 1.233-.696l6.363 3.692a.802.802 0 0 1 0 1.393z"/>
+        </svg>
+        <span id="toggleText">Start Transcribing</span>
+      </button>
+      <button id="clearBtn" class="btn btn-secondary">
+        Clear Output
+      </button>
+    </div>
+
+    <!-- Transcription Panel -->
+    <div id="transcriptionPanel" class="transcription-panel">
+      <div id="emptyState" class="empty-state">
+        <svg width="48" height="48" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+        </svg>
+        <div>
+          <p style="font-weight: 600;">No transcription yet</p>
+          <p style="font-size: 13px; margin-top: 4px;">Click the button to begin speaking.</p>
+        </div>
+      </div>
+      <div id="finalizedContainer" class="finalized-text"></div>
+      <div id="activeText" class="active-text" style="display: none;"></div>
+    </div>
+  </div>
+
+  <script type="module" src="./main.js"></script>
+</body>
+</html>

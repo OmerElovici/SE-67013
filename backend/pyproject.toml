@@ -1,0 +1,17 @@
+[project]
+name = "backend"
+version = "0.1.0"
+description = "FastAPI backend for real-time Whisper CPU transcription"
+dependencies = [
+    "fastapi>=0.100.0",
+    "uvicorn[standard]>=0.22.0",
+    "websockets>=11.0",
+    "numpy>=1.20.0,<2.0.0",
+    "pywhispercpp>=0.0.10"
+]
+requires-python = ">=3.12"
+readme = "README.md"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

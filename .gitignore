@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.egg-info/
+build/
+dist/
+
+# Whisper Models
+models/
+
+# Frontend
+node_modules/
+dist/
+
+# OS / IDEs
+.DS_Store
+.vscode/
+.idea/
