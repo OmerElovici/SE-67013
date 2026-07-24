@@ -5,6 +5,9 @@ __pycache__/
 .egg-info/
 build/
 dist/
+.env
+.env.*
+!.env.example
 
 # Whisper Models
 models/
