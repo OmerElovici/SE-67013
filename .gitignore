@@ -12,6 +12,9 @@ dist/
 # Whisper Models
 models/
 
+# Runtime Data
+backend/data/
+
 # Frontend
 node_modules/
 dist/

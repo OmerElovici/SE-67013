@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import re
 import time
 from dataclasses import dataclass, field
@@ -13,7 +14,11 @@ from backend.services.audio import (
     pcm_level,
 )
 from backend.services.events import EventBroker
+from backend.services.session import SessionService
+from backend.services.vocabulary import VocabularyService
 from backend.services.whisper import WhisperEngine
+
+logger = logging.getLogger(__name__)
 
 BYTES_PER_SECOND = DISCORD_SAMPLE_RATE * DISCORD_CHANNELS * 2
 
@@ -61,10 +66,14 @@ class TranscriptionPipeline:
         engine: WhisperEngine,
         broker: EventBroker,
         settings: Settings,
+        vocabulary_service: VocabularyService | None = None,
+        session_service: SessionService | None = None,
     ):
         self._engine = engine
         self._broker = broker
         self._settings = settings
+        self._vocabulary_service = vocabulary_service
+        self._session_service = session_service
         self._buffers: dict[str, SpeakerBuffer] = {}
         self._jobs: asyncio.Queue[TranscriptionJob | None] = asyncio.Queue()
         self._latest_partial_revision: dict[str, int] = {}
@@ -95,47 +104,50 @@ class TranscriptionPipeline:
             await self._worker_task
 
     def ingest_frame(self, speaker: Speaker, pcm: bytes) -> None:
-        if not pcm:
-            return
-
-        now = time.monotonic()
-        buffer = self._buffers.get(speaker.id)
-        level = pcm_level(pcm)
-        if buffer is None:
-            if level < self._settings.AUDIO_LEVEL_THRESHOLD:
+        try:
+            if not pcm:
                 return
-            buffer = SpeakerBuffer(speaker=speaker)
-            self._buffers[speaker.id] = buffer
-            self._publish_speaking(speaker, True)
 
-        buffer.pcm.extend(pcm)
-        buffer.last_packet_at = now
-        buffer.revision += 1
+            now = time.monotonic()
+            buffer = self._buffers.get(speaker.id)
+            level = pcm_level(pcm)
+            if buffer is None:
+                if level < self._settings.AUDIO_LEVEL_THRESHOLD:
+                    return
+                buffer = SpeakerBuffer(speaker=speaker)
+                self._buffers[speaker.id] = buffer
+                self._publish_speaking(speaker, True)
 
-        if level >= self._settings.AUDIO_LEVEL_THRESHOLD:
-            buffer.last_voice_at = now
+            buffer.pcm.extend(pcm)
+            buffer.last_packet_at = now
+            buffer.revision += 1
 
-        if now - self._last_level_event.get(speaker.id, 0.0) >= 0.1:
-            self._last_level_event[speaker.id] = now
-            self._broker.publish(
-                {
-                    "type": "audio_level",
-                    **speaker.as_event_fields(),
-                    "level": min(level * 4.0, 1.0),
-                }
-            )
+            if level >= self._settings.AUDIO_LEVEL_THRESHOLD:
+                buffer.last_voice_at = now
 
-        duration = len(buffer.pcm) / BYTES_PER_SECOND
-        if duration >= self._settings.MAX_UTTERANCE_SECONDS:
-            self.finalize_speaker(speaker.id)
-            return
+            if now - self._last_level_event.get(speaker.id, 0.0) >= 0.1:
+                self._last_level_event[speaker.id] = now
+                self._broker.publish(
+                    {
+                        "type": "audio_level",
+                        **speaker.as_event_fields(),
+                        "level": min(level * 4.0, 1.0),
+                    }
+                )
 
-        if (
-            duration >= 0.75
-            and now - buffer.last_partial_at >= self._settings.PARTIAL_INTERVAL_SECONDS
-        ):
-            buffer.last_partial_at = now
-            self._submit_job(buffer, finalized=False)
+            duration = len(buffer.pcm) / BYTES_PER_SECOND
+            if duration >= self._settings.MAX_UTTERANCE_SECONDS:
+                self.finalize_speaker(speaker.id)
+                return
+
+            if (
+                duration >= 0.75
+                and now - buffer.last_partial_at >= self._settings.PARTIAL_INTERVAL_SECONDS
+            ):
+                buffer.last_partial_at = now
+                self._submit_job(buffer, finalized=False)
+        except Exception as error:  # noqa: BLE001
+            logger.exception("Error in ingest_frame: %s", error)
 
     def finalize_speaker(
         self,
@@ -208,10 +220,27 @@ class TranscriptionPipeline:
                     "",
                     text,
                     flags=re.IGNORECASE,
+                )
+                text = re.sub(
+                    r"\[LAUGHTER\]|\(laughing\)",
+                    "🤣",
+                    text,
+                    flags=re.IGNORECASE,
                 ).strip()
+                if self._vocabulary_service:
+                    text = self._vocabulary_service.redact(text)
 
                 if self._is_stale_partial(job):
                     continue
+
+                if job.finalized and text and self._session_service:
+                    self._session_service.append_utterance(
+                        utterance_id=job.utterance_id,
+                        speaker_id=job.speaker.id,
+                        speaker_name=job.speaker.name,
+                        avatar_url=job.speaker.avatar_url,
+                        text=text,
+                    )
 
                 self._broker.publish(
                     {

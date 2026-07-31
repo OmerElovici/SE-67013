@@ -4,9 +4,11 @@ from typing import Any
 
 import discord
 
+from backend.services.announcement import AnnouncementService
 from backend.services.discord_audio import DiscordAudioSink
 from backend.services.discord_voice_recv import DAVEVoiceRecvClient
 from backend.services.events import EventBroker
+from backend.services.session import SessionService
 from backend.services.transcription import TranscriptionPipeline
 
 logger = logging.getLogger(__name__)
@@ -41,6 +43,8 @@ class DiscordBotService:
         token: str,
         pipeline: TranscriptionPipeline,
         broker: EventBroker,
+        announcement_service: AnnouncementService | None = None,
+        session_service: SessionService | None = None,
     ):
         intents = discord.Intents.none()
         intents.guilds = True
@@ -49,6 +53,8 @@ class DiscordBotService:
         self._token = token
         self._pipeline = pipeline
         self._broker = broker
+        self._announcement_service = announcement_service
+        self._session_service = session_service
         self._client = DTTDiscordClient(self, intents=intents)
         self._runner: asyncio.Task[None] | None = None
         self._ready = asyncio.Event()
@@ -98,6 +104,8 @@ class DiscordBotService:
     ) -> None:
         if channel is None:
             self._pipeline.finalize_all()
+            if self._session_service:
+                self._session_service.end_session()
             self._voice_client = None
             self._sink = None
             self._state = "ready" if self._ready.is_set() else "starting"
@@ -169,6 +177,14 @@ class DiscordBotService:
                     self._sink,
                     after=self._handle_listen_done,
                 )
+                if self._session_service:
+                    self._session_service.start_session(
+                        guild_id=channel.guild.id,
+                        guild_name=channel.guild.name,
+                        channel_id=channel.id,
+                        channel_name=channel.name,
+                    )
+                self._play_announcement_if_configured(voice_client)
                 self._state = "connected"
                 self.publish_status()
                 return self.status()
@@ -193,6 +209,8 @@ class DiscordBotService:
         self.publish_status()
 
         self._pipeline.finalize_all()
+        if self._session_service:
+            self._session_service.end_session()
         self._voice_client = None
         self._sink = None
 
@@ -277,3 +295,15 @@ class DiscordBotService:
             self._error = f"Discord bot stopped: {error}"
             self._state = "error"
             self.publish_status()
+
+    def _play_announcement_if_configured(self, voice_client: DAVEVoiceRecvClient) -> None:
+        if not self._announcement_service:
+            return
+        try:
+            path = self._announcement_service.get_file_path()
+            if not path or not voice_client.is_connected():
+                return
+            audio_source = discord.FFmpegPCMAudio(str(path))
+            voice_client.play(audio_source)
+        except Exception:
+            logger.exception("Failed to play connection announcement clip")

@@ -9,12 +9,13 @@ from backend.services.transcription import Speaker, TranscriptionPipeline
 
 
 class FakeWhisperEngine:
-    def __init__(self):
+    def __init__(self, text: str = " hello from discord "):
         self.received_audio: list[np.ndarray] = []
+        self.text = text
 
     def transcribe(self, audio: np.ndarray) -> str:
         self.received_audio.append(audio)
-        return " hello from discord "
+        return self.text
 
 
 def make_settings(**overrides):
@@ -54,6 +55,30 @@ async def test_finalized_transcript_keeps_discord_speaker():
     assert transcript["text"] == "hello from discord"
     assert transcript["finalized"] is True
     assert engine.received_audio[0].dtype == np.float32
+
+    await pipeline.stop()
+
+
+@pytest.mark.asyncio
+async def test_laughter_markers_are_replaced_with_emoji():
+    engine = FakeWhisperEngine("That was funny [LAUGHTER] and (Laughing)")
+    broker = EventBroker()
+    events = broker.subscribe()
+    pipeline = TranscriptionPipeline(engine, broker, make_settings())
+    speaker = Speaker(id="42", name="Ada")
+    pcm = np.full((12000, 2), 1000, dtype="<i2").tobytes()
+
+    await pipeline.start()
+    pipeline.ingest_frame(speaker, pcm)
+    pipeline.finalize_speaker(speaker.id)
+    await pipeline._jobs.join()
+
+    transcript = next(
+        event
+        for event in list(events._queue)
+        if event["type"] == "transcript"
+    )
+    assert transcript["text"] == "That was funny 🤣 and 🤣"
 
     await pipeline.stop()
 

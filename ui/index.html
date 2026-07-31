@@ -19,6 +19,7 @@
       </div>
     </header>
 
+    <!-- Discord Connection Panel -->
     <section class="connection-panel" aria-label="Discord connection">
       <div class="field">
         <label for="channelSelect">Discord voice channel</label>
@@ -36,12 +37,13 @@
       <div id="errorMessage" class="error-message" role="alert" hidden></div>
     </section>
 
+    <!-- Audio Visualizer & Active Speakers -->
     <section class="visualizer-container" aria-label="Incoming Discord audio level">
       <canvas id="visualizer" class="visualizer-canvas"></canvas>
     </section>
-
     <section id="activeSpeakers" class="active-speakers" aria-live="polite"></section>
 
+    <!-- Main Live Controls -->
     <section class="controls">
       <button id="toggleBtn" class="btn btn-primary" disabled>
         <svg id="toggleIcon" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
@@ -52,6 +54,17 @@
       <button id="clearBtn" class="btn btn-secondary">Clear Output</button>
     </section>
 
+    <!-- Session History Selector -->
+    <section class="card-panel">
+      <div class="field">
+        <label for="sessionSelect">Browse Transcript Sessions</label>
+        <select id="sessionSelect">
+          <option value="active">Live Active Session</option>
+        </select>
+      </div>
+    </section>
+
+    <!-- Live Transcripts Panel -->
     <section id="transcriptionPanel" class="transcription-panel" aria-live="polite">
       <div id="emptyState" class="empty-state">
         <svg width="48" height="48" viewBox="0 0 24 24" stroke="currentColor">
@@ -63,6 +76,77 @@
         </div>
       </div>
       <div id="transcriptList" class="transcript-list"></div>
+    </section>
+
+    <!-- Banned Words Vocabulary Settings -->
+    <section class="card-panel">
+      <h2 class="section-title">Banned-Word Vocabulary</h2>
+      <p class="section-desc">Manage exact words or multi-word phrases to redact with **** case-insensitively.</p>
+      <div class="field mt-2">
+        <textarea id="vocabInput" rows="4" placeholder="Enter one word or phrase per line (e.g. ass, shut up)..."></textarea>
+      </div>
+      <div class="card-actions">
+        <button id="vocabSaveBtn" class="btn btn-secondary">Save Vocabulary</button>
+        <span id="vocabStatus" class="status-hint"></span>
+      </div>
+    </section>
+
+    <!-- Connection Announcement MP3 Settings -->
+    <section class="card-panel">
+      <h2 class="section-title">Connection Announcement</h2>
+      <p class="section-desc">Upload a user-provided MP3 audio clip (max 10 MB, max 30s) to play once upon joining a voice channel.</p>
+      <div id="announcementStatus" class="status-callout mt-2">Checking announcement status…</div>
+      <div class="upload-row mt-2">
+        <input id="announcementFileInput" type="file" accept="audio/mpeg,.mp3">
+        <button id="announcementUploadBtn" class="btn btn-secondary">Upload MP3</button>
+        <button id="announcementRemoveBtn" class="btn btn-danger" hidden>Remove MP3</button>
+      </div>
+    </section>
+
+    <!-- Ollama Report Generation & Export Section -->
+    <section class="card-panel reports-section">
+      <h2 class="section-title">Local LLM Reports & Summaries</h2>
+      <p class="section-desc">Generate factual summaries using local Ollama (qwen3:8b) from past and active transcript sessions.</p>
+
+      <div class="report-controls-grid mt-3">
+        <div class="field">
+          <label for="reportSessionsSelect">Select Sessions (Hold Ctrl/Cmd for multiple)</label>
+          <select id="reportSessionsSelect" multiple size="4">
+            <option value="" disabled>Loading sessions…</option>
+          </select>
+        </div>
+        <div class="field flex-col">
+          <label for="reportLangSelect">Report Language</label>
+          <select id="reportLangSelect">
+            <option value="en">English</option>
+            <option value="he">עברית (Hebrew)</option>
+          </select>
+          <button id="generateReportBtn" class="btn btn-primary mt-auto">Get Summary</button>
+        </div>
+      </div>
+
+      <!-- Scoped Error Message -->
+      <div id="reportErrorMessage" class="error-message mt-2" role="alert" hidden></div>
+
+      <!-- Active Generated/Viewed Report View -->
+      <div id="reportDisplayContainer" class="report-display-container mt-3" hidden>
+        <div class="report-header-bar">
+          <h3 id="reportTitle" class="report-view-title">Generated Report</h3>
+          <div class="export-actions">
+            <button id="exportMdBtn" class="btn btn-sm btn-secondary">Export .md</button>
+            <button id="exportTxtBtn" class="btn btn-sm btn-secondary">Export .txt</button>
+          </div>
+        </div>
+        <div id="reportContent" class="report-body"></div>
+      </div>
+
+      <!-- Saved Reports History List -->
+      <div class="saved-reports-container mt-4">
+        <h3 class="subsection-title">Saved Reports History</h3>
+        <div id="savedReportsList" class="saved-reports-list">
+          <p class="text-muted">No saved reports yet.</p>
+        </div>
+      </div>
     </section>
   </main>
 

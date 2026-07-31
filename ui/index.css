@@ -138,6 +138,32 @@ body {
   background: var(--bg-page);
 }
 
+.card-panel {
+  padding: 20px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-page);
+}
+
+.section-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--brand-navy);
+}
+
+.section-desc {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-top: 2px;
+}
+
+.subsection-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--brand-navy);
+  margin-bottom: 8px;
+}
+
 .field {
   display: flex;
   flex-direction: column;
@@ -168,15 +194,27 @@ select {
   font-size: 14px;
 }
 
-select:focus {
+select[multiple] {
+  height: auto;
+  padding: 8px;
+}
+
+textarea {
+  width: 100%;
+  padding: 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-container);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 14px;
+  resize: vertical;
+}
+
+textarea:focus, select:focus {
   border-color: var(--primary-blue);
   box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.14);
   outline: none;
-}
-
-select:disabled {
-  color: var(--text-muted);
-  cursor: not-allowed;
 }
 
 .icon-btn {
@@ -219,6 +257,34 @@ select:disabled {
   align-items: center;
 }
 
+.card-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.status-hint {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.status-callout {
+  padding: 8px 12px;
+  background: var(--bg-container);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.upload-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
 .btn {
   font-family: var(--font-primary);
   font-size: 14px;
@@ -230,6 +296,11 @@ select:disabled {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.btn-sm {
+  padding: 6px 14px;
+  font-size: 12px;
 }
 
 .btn-primary {
@@ -272,10 +343,14 @@ select:disabled {
   background-color: rgba(15, 23, 42, 0.05);
 }
 
-.btn-secondary:disabled {
-  border-color: var(--text-muted);
-  color: var(--text-muted);
-  cursor: not-allowed;
+.btn-danger {
+  background-color: var(--error-red);
+  color: white;
+  border: none;
+}
+
+.btn-danger:hover {
+  background-color: #DC2626;
 }
 
 .visualizer-container {
@@ -420,6 +495,109 @@ select:disabled {
   font-size: 13px;
 }
 
+.report-controls-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.flex-col {
+  display: flex;
+  flex-direction: column;
+}
+
+.mt-auto {
+  margin-top: auto;
+}
+
+.mt-2 {
+  margin-top: 8px;
+}
+
+.mt-3 {
+  margin-top: 12px;
+}
+
+.mt-4 {
+  margin-top: 16px;
+}
+
+.report-display-container {
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-container);
+  padding: 16px;
+}
+
+.report-header-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid var(--border-color);
+  padding-bottom: 10px;
+  margin-bottom: 12px;
+}
+
+.report-view-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--brand-navy);
+}
+
+.export-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.report-body {
+  font-size: 14px;
+  color: var(--text-primary);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  max-height: 350px;
+  overflow-y: auto;
+  background: var(--bg-page);
+  padding: 12px;
+  border-radius: 6px;
+}
+
+.saved-reports-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.saved-report-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 14px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-container);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.saved-report-item:hover {
+  border-color: var(--primary-blue);
+  background: rgba(59, 130, 246, 0.03);
+}
+
+.saved-report-meta {
+  font-size: 13px;
+}
+
+.saved-report-time {
+  font-weight: 600;
+  color: var(--brand-navy);
+}
+
+.saved-report-sess {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
 @media (max-width: 640px) {
   body {
     padding: 20px 12px;
@@ -443,6 +621,10 @@ select:disabled {
   .controls {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .report-controls-grid {
+    grid-template-columns: 1fr;
   }
 
   .btn {
