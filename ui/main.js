@@ -17,6 +17,7 @@ const canvasCtx = canvas.getContext('2d');
 
 // Session Browsing Elements
 const sessionSelect = document.getElementById('sessionSelect');
+const sessionStatus = document.getElementById('sessionStatus');
 
 // Vocabulary Elements
 const vocabInput = document.getElementById('vocabInput');
@@ -54,6 +55,8 @@ let status = { state: 'starting', connected: false, bot_ready: false };
 let isBusy = false;
 let currentActiveReport = null;
 let currentDisplayedSessionId = 'active';
+let sessionLoadPromise = null;
+let refreshAfterSessionLoad = false;
 
 const activeSpeakers = new Map();
 const speakerLevels = new Map();
@@ -108,13 +111,13 @@ function updateStatus(nextStatus) {
 
   if (state === 'connected') {
     statusDot.classList.add('recording');
-    statusText.textContent = `Listening · ${status.channel_name}`;
+    statusText.textContent = `Listening - ${status.channel_name}`;
   } else if (state === 'ready') {
     statusDot.classList.add('connected');
     statusText.textContent = 'Bot Ready';
   } else if (state === 'connecting' || state === 'disconnecting' || state === 'starting') {
     statusDot.classList.add('connecting');
-    statusText.textContent = state === 'starting' ? 'Bot Starting…' : `${capitalize(state)}…`;
+    statusText.textContent = state === 'starting' ? 'Bot starting...' : `${capitalize(state)}...`;
   } else if (state === 'error') {
     statusDot.classList.add('disconnected');
     statusText.textContent = 'Error';
@@ -142,7 +145,7 @@ function updateControls() {
     toggleIcon.innerHTML = DISCONNECT_ICON;
     toggleBtn.classList.add('disconnect');
   } else {
-    toggleText.textContent = isBusy ? 'Connecting…' : 'Connect Bot';
+    toggleText.textContent = isBusy ? 'Connecting...' : 'Connect bot';
     toggleIcon.innerHTML = CONNECT_ICON;
     toggleBtn.classList.remove('disconnect');
   }
@@ -173,7 +176,7 @@ async function apiRequest(path, options = {}) {
 
 async function loadChannels() {
   refreshBtn.disabled = true;
-  channelSelect.innerHTML = '<option value="">Loading voice channels…</option>';
+  channelSelect.innerHTML = '<option value="">Loading voice channels...</option>';
 
   try {
     const payload = await apiRequest('/discord/channels');
@@ -290,7 +293,7 @@ function isViewingActiveSession() {
   return val === 'active' || (activeSessionId && val === activeSessionId);
 }
 
-function handleEvent(event) {
+export function handleEvent(event) {
   if (event.type === 'status') {
     const wasReady = status.bot_ready;
     updateStatus(event);
@@ -303,6 +306,9 @@ function handleEvent(event) {
   } else if (event.type === 'transcript') {
     if (isViewingActiveSession()) {
       updateTranscript(event);
+    }
+    if (event.finalized && String(event.text || '').trim() && !activeSessionId) {
+      requestActiveSessionRefresh();
     }
   } else if (event.type === 'error') {
     showError(event.message);
@@ -322,7 +328,7 @@ function updateSpeaker(event) {
 function renderActiveSpeakers() {
   activeSpeakersElement.innerHTML = '';
   if (!activeSpeakers.size) {
-    activeSpeakersElement.innerHTML = '<span class="speaker-placeholder">Waiting for someone to speak…</span>';
+    activeSpeakersElement.innerHTML = '<span class="speaker-placeholder">No active speaker</span>';
     return;
   }
 
@@ -413,7 +419,7 @@ async function loadVocabulary() {
 
 async function saveVocabulary() {
   vocabSaveBtn.disabled = true;
-  vocabStatus.textContent = 'Saving…';
+  vocabStatus.textContent = 'Saving...';
   try {
     const payload = await apiRequest('/vocabulary', {
       method: 'POST',
@@ -460,7 +466,7 @@ async function uploadAnnouncement() {
   }
 
   announcementUploadBtn.disabled = true;
-  announcementStatus.textContent = 'Validating and uploading MP3…';
+  announcementStatus.textContent = 'Validating and uploading MP3...';
 
   try {
     const buffer = await file.arrayBuffer();
@@ -503,24 +509,58 @@ async function removeAnnouncement() {
 // ----------------------------------------------------
 // 3. Session Browsing
 // ----------------------------------------------------
-async function loadSessions() {
+export function loadSessions() {
+  if (sessionLoadPromise) return sessionLoadPromise;
+
+  sessionLoadPromise = performSessionLoad().finally(() => {
+    sessionLoadPromise = null;
+    if (refreshAfterSessionLoad && !activeSessionId) {
+      refreshAfterSessionLoad = false;
+      void loadSessions();
+    } else {
+      refreshAfterSessionLoad = false;
+    }
+  });
+  return sessionLoadPromise;
+}
+
+async function performSessionLoad() {
+  sessionStatus.textContent = 'Loading...';
+  reportSessionsSelect.setAttribute('aria-busy', 'true');
   try {
     const payload = await apiRequest('/sessions');
     activeSessionId = payload.active_session ? payload.active_session.session_id : null;
     renderSessionSelects(payload.active_session, payload.past_sessions || []);
   } catch (err) {
-    // Keep defaults
+    sessionStatus.textContent = 'Unavailable';
+    renderReportSessionMessage('Sessions unavailable.');
+    showReportError(`Could not load sessions: ${err.message}`);
+  } finally {
+    reportSessionsSelect.setAttribute('aria-busy', 'false');
   }
 }
 
-function renderSessionSelects(activeSession, pastSessions) {
+function requestActiveSessionRefresh() {
+  if (activeSessionId) return;
+  if (sessionLoadPromise) {
+    refreshAfterSessionLoad = true;
+    return;
+  }
+  void loadSessions();
+}
+
+export function renderSessionSelects(activeSession, pastSessions) {
   const currentSessionVal = sessionSelect.value;
-  sessionSelect.innerHTML = '';
-  reportSessionsSelect.innerHTML = '';
+  const selectedReportIds = new Set(
+    Array.from(reportSessionsSelect.querySelectorAll('input[type="checkbox"]:checked'))
+      .map((input) => input.value),
+  );
+  sessionSelect.replaceChildren();
+  reportSessionsSelect.replaceChildren();
 
   const activeLabel = activeSession
-    ? `⚡ Live Active Session (${activeSession.channel_name || status.channel_name || 'Voice'})`
-    : 'Live Active Session';
+    ? `Live - ${activeSession.channel_name || status.channel_name || 'Voice channel'}`
+    : 'Live active session';
 
   const liveViewerOpt = document.createElement('option');
   liveViewerOpt.value = 'active';
@@ -528,10 +568,10 @@ function renderSessionSelects(activeSession, pastSessions) {
   sessionSelect.appendChild(liveViewerOpt);
 
   if (activeSession) {
-    const activeReportOpt = document.createElement('option');
-    activeReportOpt.value = activeSession.session_id;
-    activeReportOpt.textContent = activeLabel;
-    reportSessionsSelect.appendChild(activeReportOpt);
+    appendReportSessionOption(activeSession, {
+      checked: selectedReportIds.has(activeSession.session_id),
+      isActive: true,
+    });
   }
 
   for (const s of pastSessions) {
@@ -543,10 +583,14 @@ function renderSessionSelects(activeSession, pastSessions) {
     viewerOpt.textContent = label;
     sessionSelect.appendChild(viewerOpt);
 
-    const reportOpt = document.createElement('option');
-    reportOpt.value = s.session_id;
-    reportOpt.textContent = label;
-    reportSessionsSelect.appendChild(reportOpt);
+    appendReportSessionOption(s, {
+      checked: selectedReportIds.has(s.session_id),
+      isActive: false,
+    });
+  }
+
+  if (!activeSession && !pastSessions.length) {
+    renderReportSessionMessage('No transcript sessions yet.');
   }
 
   if (currentSessionVal && Array.from(sessionSelect.options).some((o) => o.value === currentSessionVal)) {
@@ -555,6 +599,48 @@ function renderSessionSelects(activeSession, pastSessions) {
     sessionSelect.value = 'active';
   }
   currentDisplayedSessionId = sessionSelect.value;
+  const total = pastSessions.length + (activeSession ? 1 : 0);
+  sessionStatus.textContent = total ? `${total} available` : 'Empty';
+  reportSessionsSelect.setAttribute('aria-busy', 'false');
+}
+
+function appendReportSessionOption(session, { checked, isActive }) {
+  const option = document.createElement('label');
+  option.className = 'session-check-option';
+
+  const input = document.createElement('input');
+  input.type = 'checkbox';
+  input.name = 'report-session';
+  input.value = session.session_id;
+  input.checked = checked;
+
+  const copy = document.createElement('span');
+  copy.className = 'session-check-copy';
+  const name = document.createElement('span');
+  name.className = 'session-check-name';
+  name.textContent = isActive
+    ? `Live - ${session.channel_name || status.channel_name || 'Voice channel'}`
+    : session.channel_name || 'Discord channel';
+  const meta = document.createElement('span');
+  meta.className = 'session-check-meta';
+  if (isActive) {
+    meta.textContent = `${session.guild_name || 'Discord server'} - active now`;
+  } else {
+    const date = session.started_at ? new Date(session.started_at).toLocaleString() : 'Unknown date';
+    const lineCount = Number.isFinite(session.utterance_count) ? `${session.utterance_count} lines` : 'Saved session';
+    meta.textContent = `${date} - ${lineCount}`;
+  }
+
+  copy.append(name, meta);
+  option.append(input, copy);
+  reportSessionsSelect.appendChild(option);
+}
+
+function renderReportSessionMessage(message) {
+  const copy = document.createElement('p');
+  copy.className = 'checklist-message';
+  copy.textContent = message;
+  reportSessionsSelect.replaceChildren(copy);
 }
 
 async function handleSessionSelectChange() {
@@ -606,17 +692,19 @@ function renderHistoricalSession(detail) {
 // 4. Reports & Summaries & Export
 // ----------------------------------------------------
 async function generateReport() {
-  reportErrorMessage.hidden = true;
-  const selectedOptions = Array.from(reportSessionsSelect.selectedOptions).map((o) => o.value);
+  clearReportError();
+  const selectedOptions = Array.from(
+    reportSessionsSelect.querySelectorAll('input[type="checkbox"]:checked'),
+  ).map((input) => input.value);
 
   if (!selectedOptions.length) {
-    reportErrorMessage.textContent = 'Please select at least one session to summarize.';
-    reportErrorMessage.hidden = false;
+    showReportError('Please select at least one session to summarize.');
     return;
   }
 
   generateReportBtn.disabled = true;
-  generateReportBtn.textContent = 'Generating report with Ollama…';
+  generateReportBtn.textContent = 'Generating...';
+  generateReportBtn.setAttribute('aria-busy', 'true');
 
   try {
     const payload = await apiRequest('/reports', {
@@ -630,11 +718,11 @@ async function generateReport() {
     renderReportDisplay(payload);
     await loadSavedReports();
   } catch (err) {
-    reportErrorMessage.textContent = err.message;
-    reportErrorMessage.hidden = false;
+    showReportError(err.message);
   } finally {
     generateReportBtn.disabled = false;
-    generateReportBtn.textContent = 'Get Summary';
+    generateReportBtn.textContent = 'Generate';
+    generateReportBtn.removeAttribute('aria-busy');
   }
 }
 
@@ -643,94 +731,329 @@ async function loadSavedReports() {
     const payload = await apiRequest('/reports');
     renderSavedReportsList(payload.reports || []);
   } catch (err) {
-    savedReportsList.innerHTML = '<p class="text-muted">Saved reports history unavailable.</p>';
+    renderSavedReportsMessage('Saved reports history unavailable.');
+    showReportError(`Could not load saved reports: ${err.message}`);
   }
 }
 
-function renderSavedReportsList(reports) {
+function renderSavedReportsMessage(message) {
+  const copy = document.createElement('p');
+  copy.className = 'text-muted';
+  copy.textContent = message;
+  savedReportsList.replaceChildren(copy);
+}
+
+function clearReportError() {
+  reportErrorMessage.textContent = '';
+  reportErrorMessage.hidden = true;
+}
+
+function showReportError(message) {
+  reportErrorMessage.textContent = message;
+  reportErrorMessage.hidden = false;
+}
+
+function sourceSessionName(session) {
+  const channelName = session.channel_name || session.session_id || 'Selected session';
+  const guildName = session.guild_name || 'Discord Server';
+  return `${channelName} (${guildName})`;
+}
+
+async function openSavedReport(reportId, trigger) {
+  clearReportError();
+  trigger?.setAttribute('aria-busy', 'true');
+  if (trigger) trigger.disabled = true;
+  try {
+    const report = await apiRequest(`/reports/${encodeURIComponent(reportId)}`);
+    currentActiveReport = report;
+    renderReportDisplay(report);
+    for (const item of savedReportsList.querySelectorAll('.saved-report-item')) {
+      if (item.dataset.reportId === String(reportId)) item.setAttribute('aria-current', 'true');
+      else item.removeAttribute('aria-current');
+    }
+  } catch (err) {
+    showReportError(`Could not open saved report: ${err.message}`);
+  } finally {
+    trigger?.removeAttribute('aria-busy');
+    if (trigger) trigger.disabled = false;
+  }
+}
+
+export function renderSavedReportsList(reports) {
   if (!reports.length) {
-    savedReportsList.innerHTML = '<p class="text-muted">No saved reports yet.</p>';
+    renderSavedReportsMessage('No saved reports yet.');
     return;
   }
 
-  savedReportsList.innerHTML = '';
+  savedReportsList.replaceChildren();
   for (const rep of reports) {
-    const item = document.createElement('div');
+    const item = document.createElement('button');
+    item.type = 'button';
     item.className = 'saved-report-item';
+    item.dataset.reportId = String(rep.report_id || '');
 
     const meta = document.createElement('div');
     meta.className = 'saved-report-meta';
 
     const timeStr = rep.created_at ? new Date(rep.created_at).toLocaleString() : 'Unknown date';
     const langLabel = rep.language === 'he' ? 'Hebrew (עברית)' : 'English';
-    const sessionNames = (rep.session_previews || [])
-      .map((s) => s.channel_name || s.session_id)
-      .join(', ');
+    const sessionNames = (rep.session_previews || []).map(sourceSessionName).join(', ');
+    item.setAttribute(
+      'aria-label',
+      `Open ${langLabel} report from ${timeStr}. Sessions: ${sessionNames || 'Selected sessions'}`,
+    );
+    const time = document.createElement('div');
+    time.className = 'saved-report-time';
+    time.textContent = `${timeStr} - ${langLabel}`;
+    const sessions = document.createElement('div');
+    sessions.className = 'saved-report-sess';
+    sessions.textContent = `Sessions: ${sessionNames || 'Selected sessions'}`;
+    meta.append(time, sessions);
 
-    meta.innerHTML = `
-      <div class="saved-report-time">${timeStr} · ${langLabel}</div>
-      <div class="saved-report-sess">Sessions: ${sessionNames || 'Selected sessions'}</div>
-    `;
-
-    item.appendChild(meta);
-    item.addEventListener('click', () => {
-      currentActiveReport = rep;
-      renderReportDisplay(rep);
-    });
+    const arrow = document.createElement('span');
+    arrow.className = 'saved-report-arrow';
+    arrow.textContent = '›';
+    arrow.setAttribute('aria-hidden', 'true');
+    item.append(meta, arrow);
+    item.addEventListener('click', () => openSavedReport(rep.report_id, item));
     savedReportsList.appendChild(item);
   }
 }
 
-function renderReportDisplay(report) {
-  reportTitle.textContent = `Summary Report (${new Date(report.created_at).toLocaleString()})`;
-  reportContent.textContent = report.content;
+export function renderReportDisplay(report) {
+  const createdAt = report.created_at ? new Date(report.created_at) : null;
+  const createdLabel = createdAt && !Number.isNaN(createdAt.getTime())
+    ? createdAt.toLocaleString()
+    : 'Unknown date';
+  reportTitle.textContent = `Summary report - ${createdLabel}`;
+  reportContent.lang = report.language || 'en';
+  reportContent.dir = report.language === 'he' ? 'rtl' : 'ltr';
+  renderReportMarkdown(reportContent, report.content);
   reportDisplayContainer.hidden = false;
+  if (typeof reportDisplayContainer.scrollIntoView === 'function') {
+    reportDisplayContainer.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+}
+
+function appendInlineMarkdown(parent, value) {
+  const text = String(value || '');
+  const tokenPattern = /(`[^`\n]+`|\*\*[^*\n]+\*\*|__[^_\n]+__|\*[^*\n]+\*|_[^_\n]+_)/g;
+  let cursor = 0;
+
+  for (const match of text.matchAll(tokenPattern)) {
+    if (match.index > cursor) parent.append(document.createTextNode(text.slice(cursor, match.index)));
+    const token = match[0];
+    let element;
+    let content;
+    if (token.startsWith('`')) {
+      element = document.createElement('code');
+      content = token.slice(1, -1);
+    } else if (token.startsWith('**') || token.startsWith('__')) {
+      element = document.createElement('strong');
+      content = token.slice(2, -2);
+    } else {
+      element = document.createElement('em');
+      content = token.slice(1, -1);
+    }
+    element.textContent = content;
+    parent.appendChild(element);
+    cursor = match.index + token.length;
+  }
+  if (cursor < text.length) parent.append(document.createTextNode(text.slice(cursor)));
+}
+
+export function renderReportMarkdown(container, markdown) {
+  container.replaceChildren();
+  const lines = String(markdown || '').split(/\r?\n/);
+  let paragraphLines = [];
+  let list = null;
+  let codeFence = null;
+  let codeLines = [];
+
+  const flushParagraph = () => {
+    if (!paragraphLines.length) return;
+    const paragraph = document.createElement('p');
+    appendInlineMarkdown(paragraph, paragraphLines.join(' '));
+    container.appendChild(paragraph);
+    paragraphLines = [];
+  };
+
+  const closeList = () => {
+    list = null;
+  };
+
+  const flushCode = () => {
+    const pre = document.createElement('pre');
+    const code = document.createElement('code');
+    code.textContent = codeLines.join('\n');
+    pre.appendChild(code);
+    container.appendChild(pre);
+    codeLines = [];
+    codeFence = null;
+  };
+
+  for (const line of lines) {
+    const fenceMatch = line.match(/^ {0,3}(`{3,}|~{3,})/);
+    if (codeFence) {
+      if (fenceMatch && fenceMatch[1][0] === codeFence.character && fenceMatch[1].length >= codeFence.length) {
+        flushCode();
+      } else {
+        codeLines.push(line);
+      }
+      continue;
+    }
+    if (fenceMatch) {
+      flushParagraph();
+      closeList();
+      codeFence = { character: fenceMatch[1][0], length: fenceMatch[1].length };
+      continue;
+    }
+
+    if (!line.trim()) {
+      flushParagraph();
+      closeList();
+      continue;
+    }
+
+    const headingMatch = line.match(/^ {0,3}(#{1,6})[ \t]+(.+)$/);
+    if (headingMatch) {
+      flushParagraph();
+      closeList();
+      const heading = document.createElement(`h${headingMatch[1].length}`);
+      appendInlineMarkdown(heading, headingMatch[2].replace(/[ \t]+#+[ \t]*$/, ''));
+      container.appendChild(heading);
+      continue;
+    }
+
+    if (/^ {0,3}((\*|-|_)\s*){3,}$/.test(line)) {
+      flushParagraph();
+      closeList();
+      container.appendChild(document.createElement('hr'));
+      continue;
+    }
+
+    const quoteMatch = line.match(/^ {0,3}>[ \t]?(.*)$/);
+    if (quoteMatch) {
+      flushParagraph();
+      closeList();
+      const quote = document.createElement('blockquote');
+      appendInlineMarkdown(quote, quoteMatch[1]);
+      container.appendChild(quote);
+      continue;
+    }
+
+    const listMatch = line.match(/^ {0,3}([-+*]|\d+[.)])[ \t]+(.+)$/);
+    if (listMatch) {
+      flushParagraph();
+      const listType = /^\d/.test(listMatch[1]) ? 'ol' : 'ul';
+      if (!list || list.tagName.toLowerCase() !== listType) {
+        list = document.createElement(listType);
+        container.appendChild(list);
+      }
+      const item = document.createElement('li');
+      appendInlineMarkdown(item, listMatch[2]);
+      list.appendChild(item);
+      continue;
+    }
+
+    closeList();
+    paragraphLines.push(line);
+  }
+
+  flushParagraph();
+  if (codeFence) flushCode();
+  if (!container.children.length) {
+    const empty = document.createElement('p');
+    empty.className = 'text-muted';
+    empty.textContent = 'This report has no content.';
+    container.appendChild(empty);
+  }
+}
+
+export function markdownToPlainText(markdown) {
+  const codeSpans = [];
+  let fence = null;
+
+  return String(markdown || '').split('\n').map((originalLine) => {
+    const fenceMatch = originalLine.match(/^ {0,3}(`{3,}|~{3,})/);
+    if (fenceMatch) {
+      const marker = fenceMatch[1];
+      if (!fence) {
+        fence = { character: marker[0], length: marker.length };
+        return null;
+      }
+      if (marker[0] === fence.character && marker.length >= fence.length) {
+        fence = null;
+        return null;
+      }
+    }
+    if (fence) return originalLine;
+
+    let line = originalLine.replace(/(?<!\\)(`+)([^\n]*?)\1/g, (_match, _ticks, code) => {
+      const token = `\u0000CODE${codeSpans.length}\u0000`;
+      codeSpans.push(code);
+      return token;
+    });
+
+    line = line
+      .replace(/^ {0,3}#{1,6}[ \t]+/, '')
+      .replace(/^ {0,3}>[ \t]?/, '')
+      .replace(/^([ \t]*)[-+*][ \t]+/, '$1')
+      .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
+      .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1 ($2)')
+      .replace(/(?<![\\*])\*\*(?=\S)(.+?\S)\*\*(?!\*)/g, '$1')
+      .replace(/(?<![\\*])\*(?=\S)([^*\n]*?\S)\*(?!\*)/g, '$1')
+      .replace(/(?<![\\_])__(?=\S)(.+?\S)__(?!_)/g, '$1')
+      .replace(/(?<![\\_])_(?=\S)([^_\n]*?\S)_(?!_)/g, '$1')
+      .replace(/\\([\\`*_[\]{}()#+.!<>-])/g, '$1');
+
+    return line.replace(/\u0000CODE(\d+)\u0000/g, (_match, index) => codeSpans[Number(index)]);
+  }).filter((line) => line !== null).join('\n');
+}
+
+export function buildReportExport(report, format) {
+  const createdStr = report.created_at
+    ? new Date(report.created_at).toLocaleString()
+    : 'Unknown date';
+  const sessionNames = (report.session_previews || []).map(sourceSessionName).join(', ') || 'Selected sessions';
+  const filenameBase = `DTT_Report_${String(report.report_id || 'report').slice(0, 8)}`;
+
+  if (format === 'md') {
+    return {
+      filename: `${filenameBase}.md`,
+      mimeType: 'text/markdown',
+      content: `# Discord Transcription Report\n` +
+        `**Generated At:** ${createdStr}\n` +
+        `**Language:** ${report.language}\n` +
+        `**Model:** ${report.model}\n` +
+        `**Source Sessions:** ${sessionNames}\n\n` +
+        `---\n\n` +
+        `${report.content || ''}`,
+    };
+  }
+
+  if (format !== 'txt') throw new Error(`Unsupported report export format: ${format}`);
+  return {
+    filename: `${filenameBase}.txt`,
+    mimeType: 'text/plain',
+    content: `DISCORD TRANSCRIPTION REPORT\n` +
+      `Generated At: ${createdStr}\n` +
+      `Language: ${report.language}\n` +
+      `Model: ${report.model}\n` +
+      `Source Sessions: ${sessionNames}\n` +
+      `--------------------------------------------------\n\n` +
+      markdownToPlainText(report.content),
+  };
 }
 
 function exportReport(format) {
   if (!currentActiveReport) return;
-
-  const createdStr = new Date(currentActiveReport.created_at).toLocaleString();
-  const sessionNames = (currentActiveReport.session_previews || [])
-    .map((s) => `${s.channel_name} (${s.guild_name})`)
-    .join(', ');
-
-  let fileContent = '';
-  let filename = `DTT_Report_${currentActiveReport.report_id.slice(0, 8)}`;
-  let mimeType = 'text/plain';
-
-  if (format === 'md') {
-    mimeType = 'text/markdown';
-    filename += '.md';
-    fileContent = `# Discord Transcription Report\n` +
-      `**Generated At:** ${createdStr}\n` +
-      `**Language:** ${currentActiveReport.language}\n` +
-      `**Model:** ${currentActiveReport.model}\n` +
-      `**Source Sessions:** ${sessionNames}\n\n` +
-      `---\n\n` +
-      `${currentActiveReport.content}`;
-  } else {
-    filename += '.txt';
-    const plainTextBody = currentActiveReport.content
-      .replace(/#+\s?/g, '')
-      .replace(/\*\*/g, '')
-      .replace(/\*/g, '')
-      .replace(/`/g, '');
-
-    fileContent = `DISCORD TRANSCRIPTION REPORT\n` +
-      `Generated At: ${createdStr}\n` +
-      `Language: ${currentActiveReport.language}\n` +
-      `Model: ${currentActiveReport.model}\n` +
-      `Source Sessions: ${sessionNames}\n` +
-      `--------------------------------------------------\n\n` +
-      `${plainTextBody}`;
-  }
-
-  const blob = new Blob([fileContent], { type: mimeType });
+  const exported = buildReportExport(currentActiveReport, format);
+  const blob = new Blob([exported.content], { type: exported.mimeType });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
-  link.download = filename;
+  link.download = exported.filename;
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
@@ -758,13 +1081,15 @@ exportMdBtn.addEventListener('click', () => exportReport('md'));
 exportTxtBtn.addEventListener('click', () => exportReport('txt'));
 
 // Initial Load
-renderActiveSpeakers();
-updateControls();
-connectEventStream();
-loadVocabulary();
-loadAnnouncementStatus();
-loadSessions();
-loadSavedReports();
-refreshStatus().then(() => {
-  if (status.bot_ready) loadChannels();
-});
+if (!import.meta.env.VITEST) {
+  renderActiveSpeakers();
+  updateControls();
+  connectEventStream();
+  loadVocabulary();
+  loadAnnouncementStatus();
+  loadSessions();
+  loadSavedReports();
+  refreshStatus().then(() => {
+    if (status.bot_ready) loadChannels();
+  });
+}

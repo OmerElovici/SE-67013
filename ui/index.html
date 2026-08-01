@@ -3,151 +3,195 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>DTT · Discord to Text</title>
+  <title>DTT - Discord to Text</title>
   <link rel="stylesheet" href="./index.css">
 </head>
 <body>
   <main class="app-container">
     <header class="header">
       <div class="header-title">
-        <h1>DTT</h1>
-        <p>Discord conversations, transcribed locally</p>
+        <span class="brand-mark" aria-hidden="true">D</span>
+        <div>
+          <h1>DTT</h1>
+          <p>Local Discord transcription</p>
+        </div>
       </div>
-      <div class="status-badge">
-        <div id="statusDot" class="status-dot"></div>
-        <span id="statusText">Bot Starting…</span>
+      <div class="status-badge" role="status" aria-live="polite">
+        <span id="statusDot" class="status-dot" aria-hidden="true"></span>
+        <span id="statusText">Bot starting...</span>
       </div>
     </header>
 
-    <!-- Discord Connection Panel -->
-    <section class="connection-panel" aria-label="Discord connection">
-      <div class="field">
-        <label for="channelSelect">Discord voice channel</label>
+    <section class="connection-toolbar" aria-label="Discord connection">
+      <div class="channel-control">
+        <label for="channelSelect">Voice channel</label>
         <div class="select-row">
           <select id="channelSelect" disabled>
-            <option value="">Waiting for Discord bot…</option>
+            <option value="">Waiting for Discord bot...</option>
           </select>
-          <button id="refreshBtn" class="icon-btn" type="button" aria-label="Refresh channels" title="Refresh channels" disabled>
-            <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <button id="refreshBtn" class="icon-btn" type="button" aria-label="Refresh voice channels" title="Refresh voice channels" disabled>
+            <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v6h6M20 20v-6h-6M5.6 15A7 7 0 0018 17.4M18.4 9A7 7 0 006 6.6"/>
             </svg>
           </button>
         </div>
       </div>
-      <div id="errorMessage" class="error-message" role="alert" hidden></div>
-    </section>
-
-    <!-- Audio Visualizer & Active Speakers -->
-    <section class="visualizer-container" aria-label="Incoming Discord audio level">
-      <canvas id="visualizer" class="visualizer-canvas"></canvas>
-    </section>
-    <section id="activeSpeakers" class="active-speakers" aria-live="polite"></section>
-
-    <!-- Main Live Controls -->
-    <section class="controls">
-      <button id="toggleBtn" class="btn btn-primary" disabled>
-        <svg id="toggleIcon" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
-          <path d="M11.596 8.697l-6.363 3.692c-.54.313-1.233-.066-1.233-.697V4.308c0-.63.692-1.01 1.233-.696l6.363 3.692a.802.802 0 0 1 0 1.393z"/>
-        </svg>
-        <span id="toggleText">Connect Bot</span>
-      </button>
-      <button id="clearBtn" class="btn btn-secondary">Clear Output</button>
-    </section>
-
-    <!-- Session History Selector -->
-    <section class="card-panel">
-      <div class="field">
-        <label for="sessionSelect">Browse Transcript Sessions</label>
-        <select id="sessionSelect">
-          <option value="active">Live Active Session</option>
-        </select>
+      <div class="connection-actions">
+        <button id="toggleBtn" class="btn btn-primary" type="button" disabled>
+          <svg id="toggleIcon" width="16" height="16" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
+            <path d="M11.596 8.697l-6.363 3.692c-.54.313-1.233-.066-1.233-.697V4.308c0-.63.692-1.01 1.233-.696l6.363 3.692a.802.802 0 0 1 0 1.393z"/>
+          </svg>
+          <span id="toggleText">Connect bot</span>
+        </button>
       </div>
+      <div id="errorMessage" class="error-message toolbar-error" role="alert" hidden></div>
     </section>
 
-    <!-- Live Transcripts Panel -->
-    <section id="transcriptionPanel" class="transcription-panel" aria-live="polite">
-      <div id="emptyState" class="empty-state">
-        <svg width="48" height="48" viewBox="0 0 24 24" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"/>
-        </svg>
-        <div>
-          <p class="empty-title">No transcription yet</p>
-          <p id="emptyCopy" class="empty-copy">Connect the bot to a voice channel to begin.</p>
-        </div>
-      </div>
-      <div id="transcriptList" class="transcript-list"></div>
-    </section>
-
-    <!-- Banned Words Vocabulary Settings -->
-    <section class="card-panel">
-      <h2 class="section-title">Banned-Word Vocabulary</h2>
-      <p class="section-desc">Manage exact words or multi-word phrases to redact with **** case-insensitively.</p>
-      <div class="field mt-2">
-        <textarea id="vocabInput" rows="4" placeholder="Enter one word or phrase per line (e.g. ass, shut up)..."></textarea>
-      </div>
-      <div class="card-actions">
-        <button id="vocabSaveBtn" class="btn btn-secondary">Save Vocabulary</button>
-        <span id="vocabStatus" class="status-hint"></span>
-      </div>
-    </section>
-
-    <!-- Connection Announcement MP3 Settings -->
-    <section class="card-panel">
-      <h2 class="section-title">Connection Announcement</h2>
-      <p class="section-desc">Upload a user-provided MP3 audio clip (max 10 MB, max 30s) to play once upon joining a voice channel.</p>
-      <div id="announcementStatus" class="status-callout mt-2">Checking announcement status…</div>
-      <div class="upload-row mt-2">
-        <input id="announcementFileInput" type="file" accept="audio/mpeg,.mp3">
-        <button id="announcementUploadBtn" class="btn btn-secondary">Upload MP3</button>
-        <button id="announcementRemoveBtn" class="btn btn-danger" hidden>Remove MP3</button>
-      </div>
-    </section>
-
-    <!-- Ollama Report Generation & Export Section -->
-    <section class="card-panel reports-section">
-      <h2 class="section-title">Local LLM Reports & Summaries</h2>
-      <p class="section-desc">Generate factual summaries using local Ollama (qwen3:8b) from past and active transcript sessions.</p>
-
-      <div class="report-controls-grid mt-3">
-        <div class="field">
-          <label for="reportSessionsSelect">Select Sessions (Hold Ctrl/Cmd for multiple)</label>
-          <select id="reportSessionsSelect" multiple size="4">
-            <option value="" disabled>Loading sessions…</option>
-          </select>
-        </div>
-        <div class="field flex-col">
-          <label for="reportLangSelect">Report Language</label>
-          <select id="reportLangSelect">
-            <option value="en">English</option>
-            <option value="he">עברית (Hebrew)</option>
-          </select>
-          <button id="generateReportBtn" class="btn btn-primary mt-auto">Get Summary</button>
-        </div>
-      </div>
-
-      <!-- Scoped Error Message -->
-      <div id="reportErrorMessage" class="error-message mt-2" role="alert" hidden></div>
-
-      <!-- Active Generated/Viewed Report View -->
-      <div id="reportDisplayContainer" class="report-display-container mt-3" hidden>
-        <div class="report-header-bar">
-          <h3 id="reportTitle" class="report-view-title">Generated Report</h3>
-          <div class="export-actions">
-            <button id="exportMdBtn" class="btn btn-sm btn-secondary">Export .md</button>
-            <button id="exportTxtBtn" class="btn btn-sm btn-secondary">Export .txt</button>
+    <div class="workspace-grid">
+      <aside class="workspace-sidebar" aria-label="Session and report navigation">
+        <section class="sidebar-section" aria-labelledby="sessionsHeading">
+          <div class="section-heading-row">
+            <div>
+              <p class="eyebrow">Workspace</p>
+              <h2 id="sessionsHeading" class="section-title">Transcripts</h2>
+            </div>
+            <span id="sessionStatus" class="status-hint" role="status" aria-live="polite">Loading...</span>
           </div>
-        </div>
-        <div id="reportContent" class="report-body"></div>
-      </div>
+          <div class="field">
+            <label for="sessionSelect">Session</label>
+            <select id="sessionSelect">
+              <option value="active">Live active session</option>
+            </select>
+          </div>
+        </section>
 
-      <!-- Saved Reports History List -->
-      <div class="saved-reports-container mt-4">
-        <h3 class="subsection-title">Saved Reports History</h3>
-        <div id="savedReportsList" class="saved-reports-list">
-          <p class="text-muted">No saved reports yet.</p>
-        </div>
+        <section class="sidebar-section report-builder" aria-labelledby="reportsHeading">
+          <div class="section-heading-row">
+            <div>
+              <p class="eyebrow">Local Ollama</p>
+              <h2 id="reportsHeading" class="section-title">Reports</h2>
+            </div>
+          </div>
+          <p class="section-desc">Create a factual summary from one or more transcript sessions.</p>
+
+          <fieldset class="report-session-fieldset" aria-describedby="reportSessionsHelp">
+            <legend>Sessions to include</legend>
+            <p id="reportSessionsHelp" class="field-help">Choose any combination. No keyboard modifier is required.</p>
+            <div id="reportSessionsSelect" class="session-checklist" aria-busy="true">
+              <p class="checklist-message">Loading sessions...</p>
+            </div>
+          </fieldset>
+
+          <div class="report-action-row">
+            <div class="field compact-field">
+              <label for="reportLangSelect">Language</label>
+              <select id="reportLangSelect">
+                <option value="en">English</option>
+                <option value="he">Hebrew (עברית)</option>
+              </select>
+            </div>
+            <button id="generateReportBtn" class="btn btn-primary" type="button">Generate</button>
+          </div>
+          <div id="reportErrorMessage" class="error-message" role="alert" hidden></div>
+
+          <div class="saved-reports-container">
+            <div class="subsection-heading-row">
+              <h3 class="subsection-title">Saved reports</h3>
+              <span class="text-muted">Select to reopen</span>
+            </div>
+            <div id="savedReportsList" class="saved-reports-list" aria-live="polite">
+              <p class="text-muted">Loading saved reports...</p>
+            </div>
+          </div>
+        </section>
+
+        <details class="settings-panel">
+          <summary>
+            <span>
+              <span class="eyebrow">Secondary</span>
+              <span class="settings-title">Settings</span>
+            </span>
+            <span class="summary-action" aria-hidden="true">Open</span>
+          </summary>
+          <div class="settings-content">
+            <section class="settings-section" aria-labelledby="vocabularyHeading">
+              <h2 id="vocabularyHeading" class="section-title">Banned-word vocabulary</h2>
+              <p class="section-desc">One exact word or phrase per line. Matches are redacted case-insensitively.</p>
+              <div class="field">
+                <label class="visually-hidden" for="vocabInput">Banned words and phrases</label>
+                <textarea id="vocabInput" rows="4" placeholder="One word or phrase per line"></textarea>
+              </div>
+              <div class="card-actions">
+                <button id="vocabSaveBtn" class="btn btn-secondary" type="button">Save vocabulary</button>
+                <span id="vocabStatus" class="status-hint" role="status" aria-live="polite"></span>
+              </div>
+            </section>
+
+            <section class="settings-section" aria-labelledby="announcementHeading">
+              <h2 id="announcementHeading" class="section-title">Connection announcement</h2>
+              <p class="section-desc">An MP3 up to 10 MB and 30 seconds, played once when the bot joins.</p>
+              <div id="announcementStatus" class="status-callout" role="status" aria-live="polite">Checking status...</div>
+              <div class="upload-row">
+                <label class="file-control" for="announcementFileInput">
+                  <span>MP3 file</span>
+                  <input id="announcementFileInput" type="file" accept="audio/mpeg,.mp3">
+                </label>
+                <div class="upload-actions">
+                  <button id="announcementUploadBtn" class="btn btn-secondary" type="button">Upload</button>
+                  <button id="announcementRemoveBtn" class="btn btn-danger" type="button" hidden>Remove</button>
+                </div>
+              </div>
+            </section>
+          </div>
+        </details>
+      </aside>
+
+      <div class="primary-workspace">
+        <section class="transcript-workspace" aria-labelledby="transcriptHeading">
+          <header class="workspace-header">
+            <div>
+              <p class="eyebrow">Live workspace</p>
+              <h2 id="transcriptHeading">Transcript</h2>
+            </div>
+            <button id="clearBtn" class="btn btn-quiet" type="button">Clear output</button>
+          </header>
+
+          <div class="audio-status" aria-label="Incoming Discord audio and active speakers">
+            <section class="visualizer-container" aria-label="Incoming audio level">
+              <canvas id="visualizer" class="visualizer-canvas"></canvas>
+            </section>
+            <section id="activeSpeakers" class="active-speakers" aria-live="polite"></section>
+          </div>
+
+          <section id="transcriptionPanel" class="transcription-panel" aria-live="polite" aria-relevant="additions text">
+            <div id="emptyState" class="empty-state">
+              <svg width="48" height="48" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"/>
+              </svg>
+              <div>
+                <p class="empty-title">No transcription yet</p>
+                <p id="emptyCopy" class="empty-copy">Connect the bot to a voice channel to begin.</p>
+              </div>
+            </div>
+            <div id="transcriptList" class="transcript-list"></div>
+          </section>
+        </section>
+
+        <section id="reportDisplayContainer" class="report-display-container" aria-labelledby="reportTitle" hidden>
+          <header class="report-header-bar">
+            <div>
+              <p class="eyebrow">Report viewer</p>
+              <h2 id="reportTitle" class="report-view-title">Generated report</h2>
+            </div>
+            <div class="export-actions" aria-label="Export report">
+              <button id="exportMdBtn" class="btn btn-sm btn-secondary" type="button">Export .md</button>
+              <button id="exportTxtBtn" class="btn btn-sm btn-secondary" type="button">Export .txt</button>
+            </div>
+          </header>
+          <article id="reportContent" class="report-body"></article>
+        </section>
       </div>
-    </section>
+    </div>
   </main>
 
   <script type="module" src="./main.js"></script>
