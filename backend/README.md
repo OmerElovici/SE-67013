@@ -10,9 +10,19 @@ just sync
 just backend-dev
 ```
 
-The backend reads `DISCORD_BOT_TOKEN`, `WHISPER_MODEL`, and `WHISPER_THREADS`
-from `backend/.env`. The UI can then list the bot's available voice channels
-and connect or disconnect it.
+The backend reads `DISCORD_BOT_TOKEN` from `backend/.env`. The UI can then list
+the bot's available voice channels and connect or disconnect it.
+
+Local speech-to-text defaults to the Whisper `small` model with six worker
+threads. Override the model with `WHISPER_MODEL` and the thread count with
+`WHISPER_THREADS`. Compared with the `tiny` and `base` models, `small` generally
+requires more CPU time and memory in exchange for better transcription quality.
+Six threads can produce sustained CPU load; lower the thread count when sharing
+the machine with other workloads, at the cost of slower transcription.
+
+Whisper is independent of report generation. Reports use Ollama at
+`OLLAMA_BASE_URL` with `OLLAMA_MODEL`, which defaults to `qwen3:8b`. Changing the
+Ollama model does not change speech-to-text behavior or resource use.
 
 Discord PCM decoding requires native Opus. On macOS:
 
