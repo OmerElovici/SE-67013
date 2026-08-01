@@ -1,10 +1,14 @@
 import asyncio
+import threading
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
 
+from backend.services.discord_bot import DiscordBotService
 from backend.services.events import EventBroker
+from backend.services.session import SessionService
 from backend.services.transcription import Speaker, TranscriptionPipeline
 
 
@@ -16,6 +20,38 @@ class FakeWhisperEngine:
     def transcribe(self, audio: np.ndarray) -> str:
         self.received_audio.append(audio)
         return self.text
+
+
+class DelayedWhisperEngine(FakeWhisperEngine):
+    def __init__(self, text: str = "delayed final transcript"):
+        super().__init__(text)
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def transcribe(self, audio: np.ndarray) -> str:
+        self.started.set()
+        if not self.release.wait(timeout=5):
+            raise RuntimeError("test transcription release timed out")
+        return super().transcribe(audio)
+
+
+class FakeVoiceClient:
+    def __init__(self):
+        self.listening = True
+        self.disconnected = False
+
+    def is_listening(self) -> bool:
+        return self.listening
+
+    def stop_listening(self) -> None:
+        self.listening = False
+
+    def is_connected(self) -> bool:
+        return False
+
+    async def disconnect(self, *, force: bool) -> None:
+        assert force is True
+        self.disconnected = True
 
 
 def make_settings(**overrides):
@@ -146,3 +182,178 @@ async def test_overlapping_speakers_have_independent_activity():
         ("2", False),
     ]
     await pipeline.stop()
+
+
+@pytest.mark.asyncio
+async def test_disconnect_waits_for_delayed_final_transcript(tmp_path):
+    engine = DelayedWhisperEngine()
+    broker = EventBroker()
+    session_service = SessionService(storage_dir=tmp_path)
+    pipeline = TranscriptionPipeline(
+        engine,
+        broker,
+        make_settings(),
+        session_service=session_service,
+    )
+    bot = DiscordBotService(
+        token="",
+        pipeline=pipeline,
+        broker=broker,
+        session_service=session_service,
+    )
+    voice_client = FakeVoiceClient()
+    bot._voice_client = voice_client
+    first = session_service.start_session("1", "Guild", "10", "First")
+    speaker = Speaker(id="42", name="Ada")
+    pcm = np.full((12000, 2), 1000, dtype="<i2").tobytes()
+
+    await pipeline.start()
+    pipeline.ingest_frame(speaker, pcm)
+    disconnect = asyncio.create_task(bot.disconnect())
+    assert await asyncio.to_thread(engine.started.wait, 2)
+
+    reconnect_started = asyncio.Event()
+
+    async def reconnect() -> dict:
+        async with bot._connection_lock:
+            reconnect_started.set()
+            return session_service.start_session("1", "Guild", "20", "Second")
+
+    reconnect_task = asyncio.create_task(reconnect())
+    await asyncio.sleep(0)
+    assert not disconnect.done()
+    assert not reconnect_started.is_set()
+
+    engine.release.set()
+    await disconnect
+    second = await reconnect_task
+
+    first_session = session_service.get_full_session(first["session_id"])
+    assert first_session is not None
+    assert first_session["session"]["status"] == "closed"
+    assert [item["text"] for item in first_session["transcripts"]] == [
+        "delayed final transcript"
+    ]
+    assert session_service.active_session_id == second["session_id"]
+    assert session_service.get_full_session(second["session_id"]) is None
+    await pipeline.stop()
+
+
+@pytest.mark.asyncio
+async def test_finalized_job_remains_bound_to_originating_session(tmp_path):
+    session_service = SessionService(storage_dir=tmp_path)
+    pipeline = TranscriptionPipeline(
+        FakeWhisperEngine("originating session transcript"),
+        EventBroker(),
+        make_settings(),
+        session_service=session_service,
+    )
+    first = session_service.start_session("1", "Guild", "10", "First")
+    session_service.append_utterance("existing-1", "1", "Ada", None, "First")
+    speaker = Speaker(id="42", name="Ada")
+    pcm = np.full((12000, 2), 1000, dtype="<i2").tobytes()
+
+    await pipeline.start()
+    pipeline.ingest_frame(speaker, pcm)
+    second = session_service.start_session("1", "Guild", "20", "Second")
+    session_service.append_utterance("existing-2", "2", "Linus", None, "Second")
+    pipeline.finalize_all()
+    await pipeline.wait_until_idle()
+
+    first_result = session_service.get_full_session(first["session_id"])
+    second_result = session_service.get_full_session(second["session_id"])
+    assert first_result is not None
+    assert second_result is not None
+    assert [item["text"] for item in first_result["transcripts"]] == [
+        "First",
+        "originating session transcript",
+    ]
+    assert [item["text"] for item in second_result["transcripts"]] == ["Second"]
+    await pipeline.stop()
+
+
+@pytest.mark.asyncio
+async def test_receiver_failure_drains_and_closes_session(tmp_path):
+    engine = FakeWhisperEngine("receiver final transcript")
+    broker = EventBroker()
+    session_service = SessionService(storage_dir=tmp_path)
+    pipeline = TranscriptionPipeline(
+        engine,
+        broker,
+        make_settings(),
+        session_service=session_service,
+    )
+    bot = DiscordBotService(
+        token="token",
+        pipeline=pipeline,
+        broker=broker,
+        session_service=session_service,
+    )
+    voice_client = FakeVoiceClient()
+    bot._voice_client = voice_client
+    meta = session_service.start_session("1", "Guild", "10", "Channel")
+    speaker = Speaker(id="42", name="Ada")
+    pcm = np.full((12000, 2), 1000, dtype="<i2").tobytes()
+
+    await pipeline.start()
+    pipeline.ingest_frame(speaker, pcm)
+    bot._listen_done_on_loop(RuntimeError("receiver stopped"))
+    while bot._cleanup_tasks:
+        await asyncio.gather(*tuple(bot._cleanup_tasks))
+
+    result = session_service.get_full_session(meta["session_id"])
+    assert result is not None
+    assert result["session"]["status"] == "closed"
+    assert result["transcripts"][0]["text"] == "receiver final transcript"
+    assert voice_client.disconnected is True
+    assert bot.status()["state"] == "error"
+    await pipeline.stop()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_drains_finalized_audio_before_closing_session(tmp_path):
+    engine = FakeWhisperEngine("shutdown final transcript")
+    broker = EventBroker()
+    session_service = SessionService(storage_dir=tmp_path)
+    pipeline = TranscriptionPipeline(
+        engine,
+        broker,
+        make_settings(),
+        session_service=session_service,
+    )
+    bot = DiscordBotService(
+        token="",
+        pipeline=pipeline,
+        broker=broker,
+        session_service=session_service,
+    )
+    bot._voice_client = FakeVoiceClient()
+    meta = session_service.start_session("1", "Guild", "10", "Channel")
+    speaker = Speaker(id="42", name="Ada")
+    pcm = np.full((12000, 2), 1000, dtype="<i2").tobytes()
+
+    await pipeline.start()
+    pipeline.ingest_frame(speaker, pcm)
+    await bot.stop()
+    await pipeline.stop()
+
+    result = session_service.get_full_session(meta["session_id"])
+    assert result is not None
+    assert result["session"]["status"] == "closed"
+    assert result["transcripts"][0]["text"] == "shutdown final transcript"
+
+
+def test_ingest_frame_does_not_hide_programming_errors(monkeypatch):
+    pipeline = TranscriptionPipeline(
+        FakeWhisperEngine(),
+        EventBroker(),
+        make_settings(),
+    )
+    speaker = Speaker(id="42", name="Ada")
+    monkeypatch.setattr(
+        "backend.services.transcription.pcm_level",
+        MagicMock(side_effect=TypeError("bad frame")),
+    )
+
+    with pytest.raises(TypeError, match="bad frame"):
+        pipeline.ingest_frame(speaker, b"audio")

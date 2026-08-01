@@ -14,6 +14,9 @@ from backend.services.vocabulary import VocabularyService
 logger = logging.getLogger(__name__)
 
 MAX_CHUNK_CHARS = 3500
+MAX_CHUNK_BYTES = 5200
+MAX_RESPONSE_CHARS = 1600
+MAX_RESPONSE_BYTES = 2400
 
 
 def _utc_now_iso() -> str:
@@ -66,7 +69,9 @@ class ReportService:
             )
 
         formatted_input = self._format_sessions_input(session_data_list)
-        report_text = await self._generate_llm_summary(formatted_input, language)
+        report_text = self._vocab_svc.redact(
+            await self._generate_llm_summary(formatted_input, language)
+        )
 
         report_id = uuid4().hex
         created_at = _utc_now_iso()
@@ -91,7 +96,7 @@ class ReportService:
         for path in self._dir.glob("*.json"):
             try:
                 data = json.loads(path.read_text(encoding="utf-8"))
-                reports.append(data)
+                reports.append(self._redact_report(data))
             except Exception as error:  # noqa: BLE001
                 logger.warning("Could not read report file %s: %s", path, error)
                 continue
@@ -104,7 +109,8 @@ class ReportService:
         if not file_path.exists():
             return None
         try:
-            return json.loads(file_path.read_text(encoding="utf-8"))
+            data = json.loads(file_path.read_text(encoding="utf-8"))
+            return self._redact_report(data)
         except Exception:  # noqa: BLE001
             return None
 
@@ -123,42 +129,100 @@ class ReportService:
             lines.append("")
         return "\n".join(lines)
 
+    def _redact_report(self, report: dict) -> dict:
+        redacted = dict(report)
+        content = redacted.get("content")
+        if isinstance(content, str):
+            redacted["content"] = self._vocab_svc.redact(content)
+        return redacted
+
     async def _generate_llm_summary(self, text: str, language: str) -> str:
-        if len(text) <= MAX_CHUNK_CHARS:
+        if self._fits_chunk(text):
             return await self._call_ollama(text, language)
 
-        # Handle oversized transcript input without silent truncation
-        chunks = self._split_into_chunks(text, MAX_CHUNK_CHARS)
+        chunks = self._split_into_chunks(
+            text,
+            MAX_CHUNK_CHARS,
+            MAX_CHUNK_BYTES,
+        )
         chunk_summaries: list[str] = []
         for index, chunk in enumerate(chunks, 1):
-            sub_prompt_intro = (
-                f"Partial transcript section {index} of {len(chunks)}:\n\n{chunk}"
+            map_input = (
+                f"Source transcript section {index} of {len(chunks)}. "
+                "Preserve its participants, attribution, timestamps, and factual "
+                f"details in the summary.\n\n{chunk}"
             )
-            summary = await self._call_ollama(sub_prompt_intro, language)
-            chunk_summaries.append(f"Section {index} Summary:\n{summary}")
+            summary = await self._call_ollama(map_input, language)
+            chunk_summaries.append(summary)
 
-        combined = "\n\n".join(chunk_summaries)
-        final_prompt = (
-            f"Synthesize the following section summaries into a single comprehensive report:\n\n{combined}"
-        )
-        return await self._call_ollama(final_prompt, language)
+        return await self._reduce_summaries(chunk_summaries, language)
 
-    def _split_into_chunks(self, text: str, max_chars: int) -> list[str]:
-        lines = text.splitlines()
+    async def _reduce_summaries(self, summaries: list[str], language: str) -> str:
+        level = 1
+        current = summaries
+
+        while len(current) > 1:
+            labelled = "\n\n".join(
+                f"Summary {index}:\n{summary}"
+                for index, summary in enumerate(current, 1)
+            )
+            batches = self._split_into_chunks(
+                labelled,
+                MAX_CHUNK_CHARS,
+                MAX_CHUNK_BYTES,
+            )
+            next_level: list[str] = []
+
+            for index, batch in enumerate(batches, 1):
+                reduce_input = (
+                    f"Aggregation level {level}, batch {index} of {len(batches)}. "
+                    "Synthesize every supplied summary. Preserve all source-session "
+                    f"facts and attribution.\n\n{batch}"
+                )
+                next_level.append(await self._call_ollama(reduce_input, language))
+
+            if len(next_level) >= len(current):
+                raise RuntimeError("Ollama summaries did not fit a converging aggregation")
+
+            current = next_level
+            level += 1
+
+        return current[0]
+
+    @staticmethod
+    def _fits_chunk(text: str) -> bool:
+        return len(text) <= MAX_CHUNK_CHARS and len(text.encode("utf-8")) <= MAX_CHUNK_BYTES
+
+    def _split_into_chunks(
+        self,
+        text: str,
+        max_chars: int,
+        max_bytes: int | None = None,
+    ) -> list[str]:
+        if max_chars <= 0:
+            raise ValueError("Chunk character limit must be positive")
+        if max_bytes is not None and max_bytes <= 0:
+            raise ValueError("Chunk byte limit must be positive")
+
         chunks: list[str] = []
-        current_chunk: list[str] = []
-        current_len = 0
+        remaining = text
 
-        for line in lines:
-            if current_len + len(line) + 1 > max_chars and current_chunk:
-                chunks.append("\n".join(current_chunk))
-                current_chunk = []
-                current_len = 0
-            current_chunk.append(line)
-            current_len += len(line) + 1
+        while remaining:
+            split_at = min(len(remaining), max_chars)
+            if max_bytes is not None:
+                while len(remaining[:split_at].encode("utf-8")) > max_bytes:
+                    split_at -= 1
 
-        if current_chunk:
-            chunks.append("\n".join(current_chunk))
+            if split_at == len(remaining):
+                chunks.append(remaining)
+                break
+
+            newline_at = remaining.rfind("\n", 0, split_at + 1)
+            if newline_at > 0:
+                split_at = newline_at + 1
+
+            chunks.append(remaining[:split_at])
+            remaining = remaining[split_at:]
 
         return chunks
 
@@ -166,30 +230,43 @@ class ReportService:
         url = f"{self._settings.OLLAMA_BASE_URL.rstrip('/')}/api/generate"
 
         if language == "he":
-            prompt = (
+            prompt_prefix = (
                 "סכם את תמלילי שיחות ה-Discord הבאים בעברית. צור פלט ברור בפורמט markdown עם הסעיפים הבאים:\n"
                 "1. סיכום כללי\n"
                 "2. משתתפים\n"
                 "3. נושאי שיחה מרכזיים לפי משתתף\n"
                 "4. נקודות חשובות והחלטות\n\n"
                 "היה תמציתי ועובדתי בלבד. אל תמציא מידע או שיוך שאינם מופיעים בתמליל.\n\n"
-                f"{content_to_summarize}"
             )
         else:
-            prompt = (
+            prompt_prefix = (
                 "Summarize the following Discord voice channel transcripts in English. Format the output clearly in markdown with the following sections:\n"
                 "1. Executive Summary\n"
                 "2. Participants\n"
                 "3. Key Discussion Topics by Participant\n"
                 "4. Noteworthy Points and Decisions\n\n"
                 "Be concise and strictly factual. Do not invent any information or attribution.\n\n"
-                f"{content_to_summarize}"
             )
+
+        prompt = f"{prompt_prefix}{content_to_summarize}"
+        prompt_bytes = len(prompt.encode("utf-8"))
+        if prompt_bytes > self._settings.OLLAMA_MAX_PROMPT_BYTES:
+            raise RuntimeError("Ollama prompt exceeds the configured safe request budget")
+        # UTF-8 bytes conservatively upper-bound byte-fallback tokenizer input.
+        if (
+            prompt_bytes + self._settings.OLLAMA_MAX_OUTPUT_TOKENS
+            > self._settings.OLLAMA_CONTEXT_TOKENS
+        ):
+            raise RuntimeError("Ollama request exceeds the configured context budget")
 
         payload = {
             "model": self._settings.OLLAMA_MODEL,
             "prompt": prompt,
             "stream": False,
+            "options": {
+                "num_ctx": self._settings.OLLAMA_CONTEXT_TOKENS,
+                "num_predict": self._settings.OLLAMA_MAX_OUTPUT_TOKENS,
+            },
         }
 
         try:
@@ -206,6 +283,11 @@ class ReportService:
                 response_text = data.get("response", "").strip()
                 if not response_text:
                     raise RuntimeError("Ollama returned empty report response")
+                if (
+                    len(response_text) > MAX_RESPONSE_CHARS
+                    or len(response_text.encode("utf-8")) > MAX_RESPONSE_BYTES
+                ):
+                    raise RuntimeError("Ollama report response exceeds the safe aggregation budget")
                 return response_text
         except aiohttp.ClientConnectorError as error:
             raise RuntimeError(

@@ -23,6 +23,9 @@ class Settings:
     # Ollama Settings
     OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
     OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "qwen3:8b")
+    OLLAMA_CONTEXT_TOKENS: int = int(os.getenv("OLLAMA_CONTEXT_TOKENS", "8192"))
+    OLLAMA_MAX_PROMPT_BYTES: int = int(os.getenv("OLLAMA_MAX_PROMPT_BYTES", "6500"))
+    OLLAMA_MAX_OUTPUT_TOKENS: int = int(os.getenv("OLLAMA_MAX_OUTPUT_TOKENS", "512"))
 
 
 settings = Settings()

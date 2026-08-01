@@ -23,6 +23,7 @@ class SessionService:
         self._dir = Path(storage_dir)
         self._dir.mkdir(parents=True, exist_ok=True)
         self._active_session_id: str | None = None
+        self._discard_interrupted_empty_sessions()
 
     @property
     def active_session_id(self) -> str | None:
@@ -66,11 +67,15 @@ class SessionService:
         avatar_url: str | None,
         text: str,
         timestamp: str | None = None,
+        session_id: str | None = None,
     ) -> None:
-        if not self._active_session_id:
+        target_session_id = session_id or self._active_session_id
+        if not target_session_id:
             return
 
-        session_file = self._dir / f"{self._active_session_id}.jsonl"
+        session_file = self._dir / f"{target_session_id}.jsonl"
+        if not session_file.exists():
+            return
         record = {
             "type": "utterance",
             "utterance_id": utterance_id,
@@ -84,29 +89,40 @@ class SessionService:
         with session_file.open("a", encoding="utf-8") as file:
             file.write(json.dumps(record) + "\n")
 
-    def end_session(self) -> dict | None:
-        if not self._active_session_id:
+    def end_session(self, session_id: str | None = None) -> dict | None:
+        target_session_id = session_id or self._active_session_id
+        if not target_session_id:
             return None
 
-        session_id = self._active_session_id
         ended_at = _utc_now_iso()
         record = {"type": "end", "ended_at": ended_at, "status": "closed"}
 
-        session_file = self._dir / f"{session_id}.jsonl"
+        session_file = self._dir / f"{target_session_id}.jsonl"
         if session_file.exists():
-            with session_file.open("a", encoding="utf-8") as file:
-                file.write(json.dumps(record) + "\n")
+            if self._is_start_only_session(session_file):
+                session_file.unlink()
+            else:
+                with session_file.open("a", encoding="utf-8") as file:
+                    file.write(json.dumps(record) + "\n")
 
-        self._active_session_id = None
-        return {"session_id": session_id, "ended_at": ended_at, "status": "closed"}
+        if target_session_id == self._active_session_id:
+            self._active_session_id = None
+        return {
+            "session_id": target_session_id,
+            "ended_at": ended_at,
+            "status": "closed",
+        }
 
-    def get_active_session(self) -> dict | None:
+    def get_active_session(
+        self,
+        vocabulary_service: VocabularyService | None = None,
+    ) -> dict | None:
         if not self._active_session_id:
             return None
         session_file = self._dir / f"{self._active_session_id}.jsonl"
         if not session_file.exists():
             return None
-        return self._read_session_metadata(session_file)
+        return self._read_session_metadata(session_file, vocabulary_service)
 
     def list_sessions(
         self,
@@ -156,6 +172,8 @@ class SessionService:
                     continue
 
         if not start_meta:
+            return None
+        if not utterances:
             return None
 
         status = start_meta.get("status", "active")
@@ -214,6 +232,8 @@ class SessionService:
 
         if not start_meta:
             return None
+        if utterance_count == 0:
+            return None
 
         session_id = start_meta.get("session_id", path.stem)
         status = start_meta.get("status", "active")
@@ -236,3 +256,25 @@ class SessionService:
             "utterance_count": utterance_count,
             "preview_text": first_utterance_text[:120],
         }
+
+    @staticmethod
+    def _is_start_only_session(path: Path) -> bool:
+        start_records = 0
+        with path.open("r", encoding="utf-8") as file:
+            for line in file:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    return False
+                if record.get("type") != "start":
+                    return False
+                start_records += 1
+        return start_records == 1
+
+    def _discard_interrupted_empty_sessions(self) -> None:
+        for path in self._dir.glob("*.jsonl"):
+            if self._is_start_only_session(path):
+                path.unlink()

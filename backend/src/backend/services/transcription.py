@@ -40,6 +40,7 @@ class Speaker:
 @dataclass
 class SpeakerBuffer:
     speaker: Speaker
+    session_id: str | None = None
     utterance_id: str = field(default_factory=lambda: uuid4().hex)
     pcm: bytearray = field(default_factory=bytearray)
     started_at: float = field(default_factory=time.monotonic)
@@ -56,6 +57,7 @@ class TranscriptionJob:
     revision: int
     pcm: bytes
     finalized: bool
+    session_id: str | None
 
 
 class TranscriptionPipeline:
@@ -99,55 +101,76 @@ class TranscriptionPipeline:
             self._monitor_task.cancel()
             await asyncio.gather(self._monitor_task, return_exceptions=True)
 
+        await self.wait_until_idle()
         await self._jobs.put(None)
         if self._worker_task:
             await self._worker_task
 
+    async def finalize_all_and_wait(self) -> None:
+        self.finalize_all()
+        await self.wait_until_idle()
+
+    async def wait_until_idle(self) -> None:
+        if not self._worker_task:
+            return
+        queue_done = asyncio.create_task(self._jobs.join())
+        done, _ = await asyncio.wait(
+            {queue_done, self._worker_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if self._worker_task in done:
+            queue_done.cancel()
+            await asyncio.gather(queue_done, return_exceptions=True)
+            self._worker_task.result()
+        await queue_done
+
     def ingest_frame(self, speaker: Speaker, pcm: bytes) -> None:
-        try:
-            if not pcm:
+        if not pcm:
+            return
+
+        now = time.monotonic()
+        buffer = self._buffers.get(speaker.id)
+        level = pcm_level(pcm)
+        if buffer is None:
+            if level < self._settings.AUDIO_LEVEL_THRESHOLD:
                 return
+            session_id = (
+                self._session_service.active_session_id
+                if self._session_service
+                else None
+            )
+            buffer = SpeakerBuffer(speaker=speaker, session_id=session_id)
+            self._buffers[speaker.id] = buffer
+            self._publish_speaking(speaker, True)
 
-            now = time.monotonic()
-            buffer = self._buffers.get(speaker.id)
-            level = pcm_level(pcm)
-            if buffer is None:
-                if level < self._settings.AUDIO_LEVEL_THRESHOLD:
-                    return
-                buffer = SpeakerBuffer(speaker=speaker)
-                self._buffers[speaker.id] = buffer
-                self._publish_speaking(speaker, True)
+        buffer.pcm.extend(pcm)
+        buffer.last_packet_at = now
+        buffer.revision += 1
 
-            buffer.pcm.extend(pcm)
-            buffer.last_packet_at = now
-            buffer.revision += 1
+        if level >= self._settings.AUDIO_LEVEL_THRESHOLD:
+            buffer.last_voice_at = now
 
-            if level >= self._settings.AUDIO_LEVEL_THRESHOLD:
-                buffer.last_voice_at = now
+        if now - self._last_level_event.get(speaker.id, 0.0) >= 0.1:
+            self._last_level_event[speaker.id] = now
+            self._broker.publish(
+                {
+                    "type": "audio_level",
+                    **speaker.as_event_fields(),
+                    "level": min(level * 4.0, 1.0),
+                }
+            )
 
-            if now - self._last_level_event.get(speaker.id, 0.0) >= 0.1:
-                self._last_level_event[speaker.id] = now
-                self._broker.publish(
-                    {
-                        "type": "audio_level",
-                        **speaker.as_event_fields(),
-                        "level": min(level * 4.0, 1.0),
-                    }
-                )
+        duration = len(buffer.pcm) / BYTES_PER_SECOND
+        if duration >= self._settings.MAX_UTTERANCE_SECONDS:
+            self.finalize_speaker(speaker.id)
+            return
 
-            duration = len(buffer.pcm) / BYTES_PER_SECOND
-            if duration >= self._settings.MAX_UTTERANCE_SECONDS:
-                self.finalize_speaker(speaker.id)
-                return
-
-            if (
-                duration >= 0.75
-                and now - buffer.last_partial_at >= self._settings.PARTIAL_INTERVAL_SECONDS
-            ):
-                buffer.last_partial_at = now
-                self._submit_job(buffer, finalized=False)
-        except Exception as error:  # noqa: BLE001
-            logger.exception("Error in ingest_frame: %s", error)
+        if (
+            duration >= 0.75
+            and now - buffer.last_partial_at >= self._settings.PARTIAL_INTERVAL_SECONDS
+        ):
+            buffer.last_partial_at = now
+            self._submit_job(buffer, finalized=False)
 
     def finalize_speaker(
         self,
@@ -189,6 +212,7 @@ class TranscriptionPipeline:
             revision=buffer.revision,
             pcm=bytes(buffer.pcm),
             finalized=finalized,
+            session_id=buffer.session_id,
         )
 
         if not finalized:
@@ -233,13 +257,19 @@ class TranscriptionPipeline:
                 if self._is_stale_partial(job):
                     continue
 
-                if job.finalized and text and self._session_service:
+                if (
+                    job.finalized
+                    and text
+                    and self._session_service
+                    and job.session_id
+                ):
                     self._session_service.append_utterance(
                         utterance_id=job.utterance_id,
                         speaker_id=job.speaker.id,
                         speaker_name=job.speaker.name,
                         avatar_url=job.speaker.avatar_url,
                         text=text,
+                        session_id=job.session_id,
                     )
 
                 self._broker.publish(
@@ -251,7 +281,8 @@ class TranscriptionPipeline:
                         "finalized": job.finalized,
                     }
                 )
-            except Exception as error:  # noqa: BLE001
+            except (RuntimeError, ValueError) as error:
+                logger.exception("Transcription failed")
                 self._broker.publish(
                     {
                         "type": "error",

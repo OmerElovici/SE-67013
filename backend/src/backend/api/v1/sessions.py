@@ -19,7 +19,7 @@ async def list_sessions(request: Request):
     session_svc = get_session_service(request)
     vocab_svc = get_vocab_service(request)
 
-    active_meta = session_svc.get_active_session()
+    active_meta = session_svc.get_active_session(vocab_svc)
     all_sessions = session_svc.list_sessions(vocab_svc)
     past_sessions = [s for s in all_sessions if s.get("session_id") != session_svc.active_session_id]
 

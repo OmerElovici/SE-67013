@@ -62,6 +62,7 @@ class DiscordBotService:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._voice_client: DAVEVoiceRecvClient | None = None
         self._sink: DiscordAudioSink | None = None
+        self._cleanup_tasks: set[asyncio.Task[None]] = set()
         self._error: str | None = None
         self._state = "starting" if token else "error"
 
@@ -87,6 +88,8 @@ class DiscordBotService:
             await self._client.close()
         if self._runner:
             await asyncio.gather(self._runner, return_exceptions=True)
+        if self._cleanup_tasks:
+            await asyncio.gather(*self._cleanup_tasks)
 
     def handle_ready(self) -> None:
         self._ready.set()
@@ -103,15 +106,18 @@ class DiscordBotService:
         channel: discord.VoiceChannel | discord.StageChannel | None,
     ) -> None:
         if channel is None:
-            self._pipeline.finalize_all()
-            if self._session_service:
-                self._session_service.end_session()
-            self._voice_client = None
-            self._sink = None
-            self._state = "ready" if self._ready.is_set() else "starting"
+            voice_client = self._voice_client
+            session_id = (
+                self._session_service.active_session_id
+                if self._session_service
+                else None
+            )
+            self._schedule_cleanup(
+                self._handle_external_disconnect(session_id, voice_client)
+            )
         elif self._voice_client:
             self._state = "connected"
-        self.publish_status()
+            self.publish_status()
 
     async def list_channels(self) -> list[dict[str, str]]:
         await self._require_ready()
@@ -208,16 +214,19 @@ class DiscordBotService:
         self._state = "disconnecting"
         self.publish_status()
 
-        self._pipeline.finalize_all()
-        if self._session_service:
-            self._session_service.end_session()
+        if voice_client:
+            try:
+                if voice_client.is_listening():
+                    voice_client.stop_listening()
+            except Exception:
+                logger.exception("Failed to stop the Discord voice receiver")
+
+        await self._finalize_active_session()
         self._voice_client = None
         self._sink = None
 
         if voice_client:
             try:
-                if voice_client.is_listening():
-                    voice_client.stop_listening()
                 await voice_client.disconnect(force=True)
             except Exception:
                 logger.exception("Failed to cleanly disconnect Discord voice")
@@ -279,12 +288,24 @@ class DiscordBotService:
                 error_type,
                 error,
             )
-            self._pipeline.finalize_all()
-            self._error = (
+            message = (
                 f"Discord audio receiver stopped: {error_type}: {error_message}"
             )
             self._state = "error"
+            self._error = message
             self.publish_status()
+            session_id = (
+                self._session_service.active_session_id
+                if self._session_service
+                else None
+            )
+            self._schedule_cleanup(
+                self._handle_receiver_failure(
+                    message,
+                    session_id,
+                    self._voice_client,
+                )
+            )
 
     def _handle_runner_done(self, task: asyncio.Task[None]) -> None:
         if task.cancelled():
@@ -307,3 +328,85 @@ class DiscordBotService:
             voice_client.play(audio_source)
         except Exception:
             logger.exception("Failed to play connection announcement clip")
+
+    async def _finalize_active_session(
+        self,
+        session_id: str | None = None,
+    ) -> None:
+        target_session_id = session_id or (
+            self._session_service.active_session_id
+            if self._session_service
+            else None
+        )
+        await self._pipeline.finalize_all_and_wait()
+        if self._session_service and target_session_id:
+            self._session_service.end_session(target_session_id)
+
+    async def _handle_external_disconnect(
+        self,
+        session_id: str | None,
+        voice_client: DAVEVoiceRecvClient | None,
+    ) -> None:
+        async with self._connection_lock:
+            if (
+                self._voice_client is not voice_client
+                or (
+                    session_id
+                    and self._session_service
+                    and self._session_service.active_session_id != session_id
+                )
+            ):
+                return
+            await self._finalize_active_session(session_id)
+            self._voice_client = None
+            self._sink = None
+            self._state = "ready" if self._ready.is_set() else "starting"
+            self.publish_status()
+
+    async def _handle_receiver_failure(
+        self,
+        message: str,
+        session_id: str | None,
+        expected_voice_client: DAVEVoiceRecvClient | None,
+    ) -> None:
+        async with self._connection_lock:
+            if (
+                self._voice_client is not expected_voice_client
+                or (
+                    session_id
+                    and self._session_service
+                    and self._session_service.active_session_id != session_id
+                )
+            ):
+                return
+            voice_client = self._voice_client
+            if voice_client:
+                try:
+                    if voice_client.is_listening():
+                        voice_client.stop_listening()
+                except Exception:
+                    logger.exception("Failed to stop the failed voice receiver")
+            await self._finalize_active_session()
+            self._voice_client = None
+            self._sink = None
+            if voice_client:
+                try:
+                    await voice_client.disconnect(force=True)
+                except Exception:
+                    logger.exception("Failed to disconnect after receiver failure")
+            self._state = "error"
+            self._error = message
+            self.publish_status()
+
+    def _schedule_cleanup(self, coroutine: Any) -> None:
+        task = asyncio.create_task(coroutine)
+        self._cleanup_tasks.add(task)
+        task.add_done_callback(self._handle_cleanup_done)
+
+    def _handle_cleanup_done(self, task: asyncio.Task[None]) -> None:
+        self._cleanup_tasks.discard(task)
+        if not task.cancelled() and task.exception():
+            logger.error(
+                "Discord cleanup failed",
+                exc_info=task.exception(),
+            )
