@@ -38,3 +38,7 @@ To verify Discord PCM reception without loading Whisper:
 ```console
 just discord-smoke VOICE_CHANNEL_ID 10
 ```
+
+## Support
+
+If DTT is useful to you, you can [buy me a coffee](https://buymeacoffee.com/se67013).
