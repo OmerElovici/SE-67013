@@ -1,4 +1,5 @@
 import asyncio
+import time
 
 import discord
 from discord.ext import voice_recv
@@ -42,10 +43,17 @@ class DiscordAudioSink(voice_recv.AudioSink):
 
         speaker = speaker_from_member(user)
         pcm = bytes(data.pcm)
+        captured_at = time.monotonic()
+        packet = getattr(data, "packet", None)
+        rtp_timestamp = getattr(packet, "timestamp", None)
+        rtp_sequence = getattr(packet, "sequence", None)
         self._loop.call_soon_threadsafe(
             self._pipeline.ingest_frame,
             speaker,
             pcm,
+            captured_at,
+            rtp_timestamp,
+            rtp_sequence,
         )
 
     def cleanup(self) -> None:

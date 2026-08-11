@@ -1,11 +1,13 @@
 import asyncio
 import threading
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
 
+from backend.services.discord_audio import DiscordAudioSink
 from backend.services.discord_bot import DiscordBotService
 from backend.services.events import EventBroker
 from backend.services.session import SessionService
@@ -273,6 +275,81 @@ async def test_finalized_job_remains_bound_to_originating_session(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_transcript_timing_comes_from_capture_not_whisper_completion(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr("backend.services.session.time.monotonic", lambda: 100.0)
+    session_service = SessionService(storage_dir=tmp_path)
+    broker = EventBroker()
+    events = broker.subscribe()
+    pipeline = TranscriptionPipeline(
+        FakeWhisperEngine("capture timed transcript"),
+        broker,
+        make_settings(),
+        session_service=session_service,
+    )
+    meta = session_service.start_session("1", "Guild", "10", "Channel")
+    speaker = Speaker(id="42", name="Ada")
+    pcm = np.full((12000, 2), 1000, dtype="<i2").tobytes()
+
+    await pipeline.start()
+    pipeline.ingest_frame(speaker, pcm, captured_at=102.5)
+    pipeline.finalize_speaker(speaker.id)
+    await pipeline.wait_until_idle()
+
+    transcript_event = next(
+        event for event in list(events._queue) if event["type"] == "transcript"
+    )
+    persisted = session_service.get_full_session(meta["session_id"])["transcripts"][0]
+    expected_timestamp = (
+        datetime.fromisoformat(meta["started_at"]) + timedelta(seconds=2.5)
+    ).isoformat()
+    assert transcript_event["start_seconds"] == 2.5
+    assert transcript_event["end_seconds"] == 2.75
+    assert persisted["start_seconds"] == 2.5
+    assert persisted["end_seconds"] == 2.75
+    assert persisted["timestamp"] == expected_timestamp
+    await pipeline.stop()
+
+
+@pytest.mark.asyncio
+async def test_recording_failure_does_not_stop_transcription(tmp_path, monkeypatch):
+    session_service = SessionService(storage_dir=tmp_path)
+    broker = EventBroker()
+    pipeline = TranscriptionPipeline(
+        FakeWhisperEngine("recording-independent transcript"),
+        broker,
+        make_settings(),
+        session_service=session_service,
+    )
+    meta = session_service.start_session("1", "Guild", "10", "Channel")
+    monkeypatch.setattr(
+        session_service,
+        "_mix_recording_frame",
+        MagicMock(side_effect=OSError("disk unavailable")),
+    )
+    speaker = Speaker(id="42", name="Ada")
+    pcm = np.full((12000, 2), 1000, dtype="<i2").tobytes()
+
+    await pipeline.start()
+    pipeline.ingest_frame(
+        speaker,
+        pcm,
+        captured_at=100.0,
+        rtp_timestamp=10_000,
+        rtp_sequence=100,
+    )
+    pipeline.finalize_speaker(speaker.id)
+    await pipeline.wait_until_idle()
+
+    detail = session_service.get_full_session(meta["session_id"])
+    assert detail["transcripts"][0]["text"] == "recording-independent transcript"
+    assert detail["recording"]["available"] is False
+    await pipeline.stop()
+
+
+@pytest.mark.asyncio
 async def test_receiver_failure_drains_and_closes_session(tmp_path):
     engine = FakeWhisperEngine("receiver final transcript")
     broker = EventBroker()
@@ -357,3 +434,59 @@ def test_ingest_frame_does_not_hide_programming_errors(monkeypatch):
 
     with pytest.raises(TypeError, match="bad frame"):
         pipeline.ingest_frame(speaker, b"audio")
+
+
+@pytest.mark.asyncio
+async def test_discord_audio_sink_excludes_missing_users_bots_and_empty_frames():
+    pipeline = MagicMock()
+    sink = DiscordAudioSink(pipeline, asyncio.get_running_loop())
+    human = SimpleNamespace(
+        id=42,
+        name="Ada",
+        display_name="Ada",
+        display_avatar=None,
+        bot=False,
+    )
+    bot = SimpleNamespace(
+        id=7,
+        name="DTT",
+        display_name="DTT",
+        display_avatar=None,
+        bot=True,
+    )
+
+    sink.write(None, SimpleNamespace(pcm=b"human audio"))
+    sink.write(bot, SimpleNamespace(pcm=b"bot audio"))
+    sink.write(human, SimpleNamespace(pcm=b""))
+    await asyncio.sleep(0)
+
+    pipeline.ingest_frame.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_discord_audio_sink_forwards_rtp_timing(monkeypatch):
+    monkeypatch.setattr(
+        "backend.services.discord_audio.time.monotonic",
+        lambda: 123.5,
+    )
+    pipeline = MagicMock()
+    sink = DiscordAudioSink(pipeline, asyncio.get_running_loop())
+    human = SimpleNamespace(
+        id=42,
+        name="Ada",
+        display_name="Ada",
+        display_avatar=None,
+        bot=False,
+    )
+    packet = SimpleNamespace(timestamp=987_654, sequence=321)
+
+    sink.write(human, SimpleNamespace(pcm=b"human audio", packet=packet))
+    await asyncio.sleep(0)
+
+    pipeline.ingest_frame.assert_called_once_with(
+        Speaker(id="42", name="Ada"),
+        b"human audio",
+        123.5,
+        987_654,
+        321,
+    )

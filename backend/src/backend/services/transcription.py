@@ -47,6 +47,8 @@ class SpeakerBuffer:
     last_packet_at: float = field(default_factory=time.monotonic)
     last_voice_at: float = field(default_factory=time.monotonic)
     last_partial_at: float = field(default_factory=time.monotonic)
+    start_seconds: float | None = None
+    end_seconds: float | None = None
     revision: int = 0
 
 
@@ -58,6 +60,8 @@ class TranscriptionJob:
     pcm: bytes
     finalized: bool
     session_id: str | None
+    start_seconds: float | None
+    end_seconds: float | None
 
 
 class TranscriptionPipeline:
@@ -124,26 +128,54 @@ class TranscriptionPipeline:
             self._worker_task.result()
         await queue_done
 
-    def ingest_frame(self, speaker: Speaker, pcm: bytes) -> None:
+    def ingest_frame(
+        self,
+        speaker: Speaker,
+        pcm: bytes,
+        captured_at: float | None = None,
+        rtp_timestamp: int | None = None,
+        rtp_sequence: int | None = None,
+    ) -> None:
         if not pcm:
             return
 
         now = time.monotonic()
+        session_id = (
+            self._session_service.active_session_id
+            if self._session_service
+            else None
+        )
+        capture_timing = (
+            self._session_service.capture_audio(
+                speaker.id,
+                pcm,
+                captured_at=captured_at,
+                rtp_timestamp=rtp_timestamp,
+                rtp_sequence=rtp_sequence,
+                session_id=session_id,
+            )
+            if self._session_service and session_id
+            else None
+        )
         buffer = self._buffers.get(speaker.id)
         level = pcm_level(pcm)
         if buffer is None:
             if level < self._settings.AUDIO_LEVEL_THRESHOLD:
                 return
-            session_id = (
-                self._session_service.active_session_id
-                if self._session_service
-                else None
+            buffer = SpeakerBuffer(
+                speaker=speaker,
+                session_id=session_id,
+                start_seconds=capture_timing[0] if capture_timing else None,
+                end_seconds=capture_timing[1] if capture_timing else None,
             )
-            buffer = SpeakerBuffer(speaker=speaker, session_id=session_id)
             self._buffers[speaker.id] = buffer
             self._publish_speaking(speaker, True)
 
         buffer.pcm.extend(pcm)
+        if capture_timing and buffer.session_id == session_id:
+            if buffer.start_seconds is None:
+                buffer.start_seconds = capture_timing[0]
+            buffer.end_seconds = capture_timing[1]
         buffer.last_packet_at = now
         buffer.revision += 1
 
@@ -213,6 +245,8 @@ class TranscriptionPipeline:
             pcm=bytes(buffer.pcm),
             finalized=finalized,
             session_id=buffer.session_id,
+            start_seconds=buffer.start_seconds,
+            end_seconds=buffer.end_seconds,
         )
 
         if not finalized:
@@ -270,6 +304,8 @@ class TranscriptionPipeline:
                         avatar_url=job.speaker.avatar_url,
                         text=text,
                         session_id=job.session_id,
+                        start_seconds=job.start_seconds,
+                        end_seconds=job.end_seconds,
                     )
 
                 self._broker.publish(
@@ -279,6 +315,9 @@ class TranscriptionPipeline:
                         "utterance_id": job.utterance_id,
                         "text": text,
                         "finalized": job.finalized,
+                        "session_id": job.session_id,
+                        "start_seconds": job.start_seconds,
+                        "end_seconds": job.end_seconds,
                     }
                 )
             except (RuntimeError, ValueError) as error:
