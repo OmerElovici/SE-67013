@@ -24,11 +24,13 @@
 
     <section class="connection-toolbar" aria-label="Discord connection">
       <div class="channel-control">
-        <label for="channelSelect">Voice channel</label>
+        <label id="channelSelectLabel" for="channelSelect">Voice channel</label>
         <div class="select-row">
-          <select id="channelSelect" disabled>
-            <option value="">Waiting for Discord bot...</option>
-          </select>
+          <div class="select-root" data-custom-select data-label-id="channelSelectLabel">
+            <select id="channelSelect" class="select-native" disabled>
+              <option value="">Waiting for Discord bot...</option>
+            </select>
+          </div>
           <button id="refreshBtn" class="icon-btn" type="button" aria-label="Refresh voice channels" title="Refresh voice channels" disabled>
             <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v6h6M20 20v-6h-6M5.6 15A7 7 0 0018 17.4M18.4 9A7 7 0 006 6.6"/>
@@ -58,17 +60,19 @@
             <span id="sessionStatus" class="status-hint" role="status" aria-live="polite">Loading...</span>
           </div>
           <div class="field">
-            <label for="sessionSelect">Session</label>
-            <select id="sessionSelect">
-              <option value="active">Live active session</option>
-            </select>
+            <label id="sessionSelectLabel" for="sessionSelect">Session</label>
+            <div class="select-root" data-custom-select data-label-id="sessionSelectLabel">
+              <select id="sessionSelect" class="select-native">
+                <option value="active">Live active session</option>
+              </select>
+            </div>
           </div>
         </section>
 
         <section class="sidebar-section report-builder" aria-labelledby="reportsHeading">
           <div class="section-heading-row">
             <div>
-              <p class="eyebrow">Local Ollama</p>
+              <p class="eyebrow">Session insights</p>
               <h2 id="reportsHeading" class="section-title">Reports</h2>
             </div>
           </div>
@@ -84,11 +88,13 @@
 
           <div class="report-action-row">
             <div class="field compact-field">
-              <label for="reportLangSelect">Language</label>
-              <select id="reportLangSelect">
-                <option value="en">English</option>
-                <option value="he">Hebrew (עברית)</option>
-              </select>
+              <label id="reportLanguageLabel" class="visually-hidden" for="reportLangSelect">Report language</label>
+              <div id="reportLanguageSelect" class="select-root" data-custom-select data-label-id="reportLanguageLabel">
+                <select id="reportLangSelect" class="select-native">
+                  <option value="en">English</option>
+                  <option value="he">Hebrew (עברית)</option>
+                </select>
+              </div>
             </div>
             <button id="generateReportBtn" class="btn btn-primary" type="button">Generate</button>
           </div>
@@ -163,6 +169,28 @@
             <section id="activeSpeakers" class="active-speakers" aria-live="polite"></section>
           </div>
 
+          <section class="transcript-replay" aria-labelledby="replayHeading">
+            <div class="replay-copy">
+              <h3 id="replayHeading">Transcript replay</h3>
+              <p id="replayStatus" role="status" aria-live="polite">Replay unavailable until timed transcript is available.</p>
+            </div>
+            <div class="replay-controls" role="group" aria-label="Transcript replay controls">
+              <div class="replay-timeline">
+                <label class="visually-hidden" for="replaySeek">Transcript replay position</label>
+                <input id="replaySeek" type="range" min="0" max="0" step="0.01" value="0" disabled>
+                <output id="replayTime" for="replaySeek">0:00 / 0:00</output>
+              </div>
+              <div class="replay-buttons">
+                <button id="replayPlayBtn" class="btn btn-secondary" type="button" disabled>Play</button>
+                <button id="replayPauseBtn" class="btn btn-secondary" type="button" disabled>Pause</button>
+                <button id="replayRestartBtn" class="btn btn-secondary" type="button" disabled>Restart</button>
+              </div>
+            </div>
+          </section>
+
+          <p id="recordingStatus" hidden>Playback unavailable until human audio is captured.</p>
+          <audio id="sessionRecording" class="recording-transport" preload="metadata" hidden></audio>
+
           <section id="transcriptionPanel" class="transcription-panel" aria-live="polite" aria-relevant="additions text">
             <div id="emptyState" class="empty-state">
               <svg width="48" height="48" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
@@ -177,22 +205,56 @@
           </section>
         </section>
 
-        <section id="reportDisplayContainer" class="report-display-container" aria-labelledby="reportTitle" hidden>
-          <header class="report-header-bar">
-            <div>
-              <p class="eyebrow">Report viewer</p>
-              <h2 id="reportTitle" class="report-view-title">Generated report</h2>
-            </div>
-            <div class="export-actions" aria-label="Export report">
-              <button id="exportMdBtn" class="btn btn-sm btn-secondary" type="button">Export .md</button>
-              <button id="exportTxtBtn" class="btn btn-sm btn-secondary" type="button">Export .txt</button>
-            </div>
-          </header>
-          <article id="reportContent" class="report-body"></article>
-        </section>
       </div>
     </div>
   </main>
+
+  <a
+    class="support-link"
+    href="https://buymeacoffee.com/se67013"
+    target="_blank"
+    rel="noopener noreferrer"
+    aria-label="Support DTT on Buy Me a Coffee (opens in a new tab)"
+  >
+    <svg class="support-link-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M4 5.5h12v8.25A5.25 5.25 0 0 1 10.75 19h-1.5A5.25 5.25 0 0 1 4 13.75V5.5Z"/>
+      <path d="M16 8h1.25a2.75 2.75 0 0 1 0 5.5H16"/>
+      <path d="M7.5 3.5c0 1 .75 1.25.75 2.25M11.25 3.5c0 1 .75 1.25.75 2.25"/>
+    </svg>
+    <span>Buy me a coffee</span>
+  </a>
+
+  <div id="reportDisplayContainer" class="report-modal-backdrop" hidden>
+    <section
+      id="reportDialog"
+      class="report-dialog"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="reportTitle"
+      tabindex="-1"
+    >
+      <header class="report-header-bar">
+        <div>
+          <p class="eyebrow">Report viewer</p>
+          <h2 id="reportTitle" class="report-view-title">Generated report</h2>
+        </div>
+        <div class="report-dialog-actions">
+          <div class="export-actions" aria-label="Export report">
+            <button id="exportMdBtn" class="btn btn-sm btn-secondary" type="button">Export to Markdown</button>
+            <button id="exportTxtBtn" class="btn btn-sm btn-secondary" type="button">Export to Text</button>
+          </div>
+          <button id="closeReportBtn" class="report-close-btn" type="button" aria-label="Close report">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m7 7 10 10M17 7 7 17" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="2"/>
+            </svg>
+          </button>
+        </div>
+      </header>
+      <div class="report-dialog-scroll">
+        <article id="reportContent" class="report-body"></article>
+      </div>
+    </section>
+  </div>
 
   <script type="module" src="./main.js"></script>
 </body>
