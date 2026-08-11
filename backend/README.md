@@ -20,9 +20,9 @@ requires more CPU time and memory in exchange for better transcription quality.
 Six threads can produce sustained CPU load; lower the thread count when sharing
 the machine with other workloads, at the cost of slower transcription.
 
-Whisper is independent of report generation. Reports use Ollama at
-`OLLAMA_BASE_URL` with `OLLAMA_MODEL`, which defaults to `qwen3:8b`. Changing the
-Ollama model does not change speech-to-text behavior or resource use.
+Whisper is independent of report generation. Reports require the `agy` CLI to
+be installed, available on the backend process `PATH`, and authenticated. The
+application uses the CLI's configured default model and does not select a model.
 
 Discord PCM decoding requires native Opus. On macOS:
 

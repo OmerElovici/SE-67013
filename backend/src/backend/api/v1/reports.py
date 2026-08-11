@@ -1,7 +1,15 @@
+import logging
+
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from backend.services.report import ReportService
+from backend.services.report import (
+    GENERATION_ERROR,
+    ReportGenerationError,
+    ReportService,
+)
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/reports", tags=["reports"])
 
@@ -25,10 +33,11 @@ async def create_report(payload: CreateReportRequest, request: Request):
         )
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
-    except RuntimeError as error:
-        raise HTTPException(status_code=503, detail=str(error)) from error
+    except ReportGenerationError as error:
+        raise HTTPException(status_code=503, detail=GENERATION_ERROR) from error
     except Exception as error:
-        raise HTTPException(status_code=500, detail=f"Unexpected report generation error: {error}") from error
+        logger.exception("Unexpected report generation failure")
+        raise HTTPException(status_code=500, detail=GENERATION_ERROR) from error
 
 
 @router.get("")
